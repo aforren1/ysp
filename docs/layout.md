@@ -1,6 +1,6 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.3.4, 2026-11-19 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+Status: v0.3.5, 2026-11-22 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
 v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
 [Patch 0004](#patch-0004-a-run-whose-family-has-no-font); v0.3.1: two
@@ -11,7 +11,9 @@ v0.3.2: cluster values out of order after a right-to-left override,
 Skribidi's editor on empty texts and at a text's ends,
 [Patch 0008](#patch-0008-the-editor-at-its-texts-edges); v0.3.4: End past
 the LF on each line but the first,
-[Patch 0009](#patch-0009-end-on-each-line-but-the-first)).
+[Patch 0009](#patch-0009-end-on-each-line-but-the-first); v0.3.5:
+libraries on two threads at once,
+[Patch 0010](#patch-0010-collection-ids-on-two-threads)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -27,7 +29,7 @@ header. The `ysp/*.h` headers stay free of Skribidi and HarfBuzz.
 
 - Skribidi does bidi, script and font runs, shaping (HarfBuzz), line
   breaking (libunibreak, BudouX for Japanese, Chinese and Thai) and the
-  editor. It is pinned at a commit with eight local patches. The sources are
+  editor. It is pinned at a commit with ten local patches. The sources are
   fetched into `third_party/` by `tools/vendor_layout.py` and checked
   against `third_party/MANIFEST.sha256`; git tracks only that recipe.
 - The glue converts Skribidi's layout runs into one group of items per
@@ -101,11 +103,12 @@ three, with the same corpus result.
 
 ## The patches
 
-Nine local patches, applied in this order. 0001, 0002, 0004, 0006 and
+Ten local patches, applied in this order. 0001, 0002, 0004, 0006 and
 0007 change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
 and `include/skribidi/skb_font_collection.h`; 0005 changes
 `src/skb_text.c`; 0008 changes `src/skb_editor.c`, `src/skb_text.c` and
-`src/skb_rich_layout.c`; 0009 changes `src/skb_editor.c`.
+`src/skb_rich_layout.c`; 0009 changes `src/skb_editor.c`; 0010 changes
+`src/skb_font_collection.c` and `src/skb_attribute_collection.c`.
 
 | Patch | SHA-256 | What it fixes |
 |---|---|---|
@@ -118,6 +121,7 @@ and `include/skribidi/skb_font_collection.h`; 0005 changes
 | `skribidi-0007-monotone-clusters.patch` | `f8459c8b13e50157995ca0769329e7698cbd4ce82a33666f0aebcd93eacf191c` | `skb__shape_run()` took each cluster's text range from the cluster values next to it and assumed them in order; HarfBuzz gave them out of order for Devanagari after U+202E, and a cluster got a negative range ([Patch 0007](#patch-0007-cluster-values-out-of-order)). |
 | `skribidi-0008-editor-empty-text.patch` | `4b08c2781fbacaca9b7b0988cd1a6c30e4728e9cb340bb34b715d84c232dac21` | The editor read paragraph 0 of none in an editor that never had text, read text properties past the text (Ctrl+Right) and before it (a double click at offset 0), and gave `memcpy()` NULL for each empty paragraph ([Patch 0008](#patch-0008-the-editor-at-its-texts-edges)). |
 | `skribidi-0009-line-end-offset.patch` | `f0c97fa5dfa25375d7f997bdc398931fea71ca27f3b866af79aaec11976bcccb` | `skb_editor_get_line_end_at()` gave the step that keeps the caret before a line's last control character a global offset, which that step compares with an offset in the paragraph; End stopped past the LF on each paragraph but the first ([Patch 0009](#patch-0009-end-on-each-line-but-the-first)). |
+| `skribidi-0010-atomic-collection-ids.patch` | `df063362c1d363a74d6d9548fa351afd869dea63a60f0e78d16c062fdb72cf07` | `skb_font_collection_create()` and `skb_attribute_collection_create()` gave each collection `++id` of a static counter; two threads that made collections at once raced on it, and two collections could get one id ([Patch 0010](#patch-0010-collection-ids-on-two-threads)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -148,7 +152,8 @@ Patch 0002, and why it sits where it does:
 
 CMake hashes the patches and checks each source file a patch changes
 (`skb_layout.c`, `skb_font_collection.c`, `skb_text.c`, `skb_editor.c`,
-`skb_rich_layout.c`; `skb_layout.c` only before v0.3.3) against the
+`skb_rich_layout.c`, `skb_attribute_collection.c`; `skb_layout.c` only
+before v0.3.3, `skb_attribute_collection.c` from v0.3.5) against the
 manifest; a tree that differs still builds, and its logged patch field
 ends in `,tree-differs`, which the test refuses. The logged field lists
 the hashes in the order the patches apply: `sha256:ff058faa...,sha256:36ce7aec...,` and so on.
@@ -531,6 +536,55 @@ Checks (Linux gcc 12):
   text, nothing reads out of bounds, and the fuzz target has no oracle of
   where End must go. No seeds were added.
 
+### Patch 0010: collection ids on two threads
+
+Found 2026-11-22 by ThreadSanitizer in the designer's two builds at once
+(designer.md, "Part B as built"): the check thread builds the check pack
+while the build thread builds the pack, and each `ylay_create()` makes a
+Skribidi font collection and an attribute collection. The pack tool and
+the player each lay out text on one thread; the designer is the first
+program with two `ylay_lib` on two threads at once.
+
+Three races, all reported by ThreadSanitizer (gcc 12, `setarch -R`):
+
+- `skb_font_collection_create()` gives the new collection `++id` of a
+  `static uint32_t`. Two threads can read the same value, and two
+  collections then get one id. The id keys a collection's entries in a
+  layout's caches.
+- `skb_attribute_collection_create()`: the same `++id`, on its own
+  counter.
+- `ylay_get_versions()` (`pack/layout.c`) wrote HarfBuzz's version
+  pointer into its static struct at each call, and `ylay_create()` calls
+  it. Each write stored the same value, but in C two unsynchronized writes
+  are a data race.
+
+The fix:
+
+- Patch 0010 makes both adds atomic: `__atomic_add_fetch(&id, 1,
+  __ATOMIC_RELAXED)` on GCC and Clang (emcc too), `_InterlockedIncrement()`
+  on MSVC. Relaxed order is enough: only the values must differ. One thread
+  gets the ids it got before.
+- `ylay_get_versions()` gives a constant struct, with `HB_VERSION_STRING`
+  in place of `hb_version_string()`. HarfBuzz is compiled in from the
+  vendored tree, so the two are the same string; `test_layout` checks it.
+- On Windows, `pack/layout.c` and `pack/colr.c` kept the performance
+  counter's frequency in a static that the first call wrote. Each call now
+  reads it (Windows only; not run here).
+
+Checks (Linux gcc 12):
+
+- `test_layout` part 10: four threads each make and destroy 2,000 font
+  collections and 2,000 attribute collections, call `ylay_get_versions()`
+  at each step and make and destroy a `ylay_lib` at every 100th. Every
+  collection's id must differ from every other's. Without the patch (the
+  two files reverted) 387 to 967 font collections and 470 to 1,092
+  attribute collections got another's id in each of three runs; with it,
+  none.
+- Under ThreadSanitizer (Debug, built and run under `setarch -R`):
+  `test_layout` and `test_designer_build` (whose part 9 runs a Build and a
+  check pack at once, four times) give no report. With
+  `ylay_get_versions()`'s old write put back, both report it.
+
 ## Pinning and update policy
 
 From layout_probe.md 7, unchanged:
@@ -557,7 +611,7 @@ The header is the reference. In short:
 
 | Call | What it does |
 |---|---|
-| `ylay_create`, `ylay_destroy` | A library: Skribidi's font and attribute collections, a temp allocator, one reused layout object. One thread, with its `yol_ctx` |
+| `ylay_create`, `ylay_destroy` | A library: Skribidi's font and attribute collections, a temp allocator, one reused layout object. One thread, with its `yol_ctx`; libraries on different threads may be made and used at once (v0.3.5) |
 | `ylay_add_font(L, bytes, n, face, name)` | A font, in fallback order; any face of a collection. Opens it with HarfBuzz and `ysp/outline.h`, hashes it, makes an empty curve set. A font `ysp/outline.h` refuses (CFF2, no outlines) is refused by name. A COLR font goes in the emoji family (v0.3.0, [Emoji](#emoji)); a font whose color glyphs are CBDT, sbix or SVG with no COLR is refused (`YLAY_ERR_REFUSED`) |
 | `ylay_layout(L, text, n, style, spans, n_spans, block)` | Lays out UTF-8 text: size, width (0: no wrapping), line height, direction, alignment, language, a palette color; spans change size, color and language |
 | `ylay_take_new_glyphs(L, font, &glyphs)` | The glyphs built since the last call, for `ygfx_cset_add()` |
@@ -715,7 +769,8 @@ characters are missing and from which text.
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
 1. The logged versions: the Skribidi commit, the hashes (and no
-   `tree-differs`) of the nine patches, HarfBuzz 14.6.0.
+   `tree-differs`) of the ten patches, HarfBuzz 14.6.0 (also the linked
+   `hb_version_string()`).
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -823,6 +878,10 @@ characters are missing and from which text.
    glyph is past the font's glyphs (HarfBuzz passes COLR's glyph ids on
    unchecked), which gave a layer glyph past the set; such a glyph is now
    refused as a damaged font.
+
+10. Threads (v0.3.5): four threads make collections, libraries and the
+    versions at once; each collection's id is its own
+    ([Patch 0010](#patch-0010-collection-ids-on-two-threads)).
 
 ### The corpus against Chromium
 
@@ -999,6 +1058,13 @@ them. The editor calls it only on an empty rich text (`skb_editor_set_text_utf8(
 the scratch text of an input), where it has no effect; a caller that
 builds a rich text of several paragraphs with it gets them joined. Not
 patched: no path of the designer or the pack tool reaches it.
+
+### Fixed by patch 0010: two threads' collections could get one id
+
+Found 2026-11-22 by ThreadSanitizer in the designer, which builds two
+packs at once: Skribidi's font and attribute collection counters, and
+`ylay_get_versions()`'s write of its static. Patch 0010 and v0.3.5 fix
+the three ([Patch 0010](#patch-0010-collection-ids-on-two-threads)).
 
 ### Fixed by patch 0009: End past the LF on each line but the first
 

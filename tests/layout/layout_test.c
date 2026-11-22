@@ -1,6 +1,6 @@
 /* layout_test.c - checks of pack/layout (docs/layout.md, Checks).
  *
- *   1. The versions the glue logs: Skribidi's commit, the nine patch
+ *   1. The versions the glue logs: Skribidi's commit, the ten patch
  *      hashes, the HarfBuzz version.
  *   2. Visual order on every platform: a TrueType font written here (a box
  *      for every ASCII, Hebrew and Arabic codepoint) and the strings that
@@ -48,6 +48,10 @@
  *      their boxes in the set), the set's check, the same result from a
  *      second flattening, a layout's paint run, and the twelve refusals by
  *      name, a layout's with the codepoint and glyph.
+ *  10. Threads (v0.3.5, Skribidi patch 0010): four threads make and
+ *      destroy font and attribute collections, libraries and the versions
+ *      at once; every collection gets an id of its own. Run under
+ *      ThreadSanitizer, it also checks that they share no write.
  * Exit 0 on pass, 1 on a failure. YSP_FONTS_DIR overrides the font folder
  * (YLAY_TEST_FONTS, C:/Windows/Fonts by default).
  */
@@ -62,6 +66,9 @@
 #include "ysp/outline.h"
 #include "ysp/layout.h"
 #include "skribidi/skb_editor.h"
+#include "skribidi/skb_font_collection.h"
+#include "skribidi/skb_attribute_collection.h"
+#include <hb.h>   /* hb_version_string(): the versions' HarfBuzz is the linked one */
 
 #include <math.h>
 #include <stdarg.h>
@@ -69,6 +76,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../adapt/colr_font_build.h"
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 #ifndef YLAY_TEST_DIR
 #define YLAY_TEST_DIR "tests/layout"
@@ -1608,6 +1620,104 @@ static void color_checks(yol_ctx* ol) {
     free(v0.d); free(v1.d); free(text.d);
 }
 
+/* --- 10. threads ------------------------------------------------------------ */
+
+#define TH_N 4
+#define TH_ROUNDS 2000
+typedef struct th_work {
+    uint32_t font_ids[TH_ROUNDS], attr_ids[TH_ROUNDS];
+    int bad_versions, bad_libs;
+} th_work;
+
+#if defined(_WIN32)
+static DWORD WINAPI th_main(LPVOID arg)
+#else
+static void* th_main(void* arg)
+#endif
+{
+    th_work* w = (th_work*)arg;
+    yol_ctx ol;
+    int r;
+    yol_open(&ol, NULL);
+    for (r = 0; r < TH_ROUNDS; r++) {
+        skb_font_collection_t* fc = skb_font_collection_create();
+        skb_attribute_collection_t* ac = skb_attribute_collection_create();
+        const ylay_versions* v = ylay_get_versions();
+        w->font_ids[r] = skb_font_collection_get_id(fc);
+        w->attr_ids[r] = skb_attribute_collection_get_id(ac);
+        skb_font_collection_destroy(fc);
+        skb_attribute_collection_destroy(ac);
+        if (!v || strcmp(v->harfbuzz, "14.6.0") != 0) w->bad_versions++;
+        if (r % 100 == 0) {
+            ylay_lib* L = NULL;
+            if (ylay_create(&L, &(ylay_desc){ .ol = &ol }) != YLAY_OK) w->bad_libs++;
+            ylay_destroy(L);
+        }
+    }
+    yol_close(&ol);
+#if defined(_WIN32)
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static int th_cmp(const void* a, const void* b) {
+    const uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+    return x < y ? -1 : x > y;
+}
+
+/* The ids of n collections: how many are another's too. */
+static int th_dups(uint32_t* ids, int n) {
+    int i, d = 0;
+    qsort(ids, (size_t)n, sizeof *ids, th_cmp);
+    for (i = 1; i < n; i++) d += ids[i] == ids[i - 1];
+    return d;
+}
+
+static void thread_checks(void) {
+    static th_work w[TH_N];
+    static uint32_t all[TH_N * TH_ROUNDS];
+    int i, r, started = 0, bad_v = 0, bad_l = 0;
+#if defined(_WIN32)
+    HANDLE h[TH_N];
+    for (i = 0; i < TH_N; i++) {
+        h[i] = CreateThread(NULL, 0, th_main, &w[i], 0, NULL);
+        started += h[i] != NULL;
+    }
+    for (i = 0; i < TH_N; i++)
+        if (h[i]) {
+            WaitForSingleObject(h[i], INFINITE);
+            CloseHandle(h[i]);
+        }
+#else
+    pthread_t h[TH_N];
+    int ok[TH_N];
+    for (i = 0; i < TH_N; i++) {
+        ok[i] = pthread_create(&h[i], NULL, th_main, &w[i]) == 0;
+        started += ok[i];
+    }
+    for (i = 0; i < TH_N; i++)
+        if (ok[i]) pthread_join(h[i], NULL);
+#endif
+    CHECK(started == TH_N, "threads: %d of %d started", started, TH_N);
+    if (started != TH_N) return;
+    for (i = 0; i < TH_N; i++) {
+        bad_v += w[i].bad_versions;
+        bad_l += w[i].bad_libs;
+    }
+    CHECK(bad_v == 0 && bad_l == 0, "threads: %d versions and %d libraries wrong", bad_v, bad_l);
+    for (i = 0; i < TH_N; i++)
+        for (r = 0; r < TH_ROUNDS; r++) all[i * TH_ROUNDS + r] = w[i].font_ids[r];
+    r = th_dups(all, TH_N * TH_ROUNDS);
+    CHECK(r == 0, "threads: %d font collections got another's id", r);
+    for (i = 0; i < TH_N; i++)
+        for (r = 0; r < TH_ROUNDS; r++) all[i * TH_ROUNDS + r] = w[i].attr_ids[r];
+    r = th_dups(all, TH_N * TH_ROUNDS);
+    CHECK(r == 0, "threads: %d attribute collections got another's id", r);
+    printf("threads: %d threads, %d font and %d attribute collections each\n", TH_N, TH_ROUNDS, TH_ROUNDS);
+}
+
 int main(void) {
     yol_ctx ol;
     ylay_lib* L;
@@ -1623,11 +1733,15 @@ int main(void) {
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
     CHECK(strlen(v->skribidi) == 40, "Skribidi's commit is not set: %s", v->skribidi);
     {
-        int ok = strlen(v->skribidi_patch) == 9 * (7 + 64) + 8, k;
-        for (k = 0; k < 9 && ok; k++) ok = strncmp(v->skribidi_patch + 72 * k, "sha256:", 7) == 0;
-        CHECK(ok, "the nine patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+        int ok = strlen(v->skribidi_patch) == 10 * (7 + 64) + 9, k;
+        for (k = 0; k < 10 && ok; k++) ok = strncmp(v->skribidi_patch + 72 * k, "sha256:", 7) == 0;
+        CHECK(ok, "the ten patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
     }
-    CHECK(strcmp(v->harfbuzz, "14.6.0") == 0, "HarfBuzz is %s, the pin is 14.6.0", v->harfbuzz);
+    CHECK(strcmp(v->harfbuzz, "14.6.0") == 0 && strcmp(v->harfbuzz, hb_version_string()) == 0, "HarfBuzz is %s (%s linked), the pin is 14.6.0",
+          v->harfbuzz, hb_version_string());
+
+    /* 10. threads */
+    thread_checks();
 
     /* 2. visual order with the written font */
     make_font(&font);

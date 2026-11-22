@@ -23,9 +23,10 @@
 
 static double ylay__colr_now_us(void) {
 #if defined(_WIN32)
-    static LARGE_INTEGER f;
-    LARGE_INTEGER c;
-    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    /* read at each call, not kept in a static: libraries on two threads
+     * time their work at once (v0.3.5) */
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&c);
     return (double)c.QuadPart * 1e6 / (double)f.QuadPart;
 #else

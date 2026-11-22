@@ -2889,9 +2889,10 @@ under `setarch -R`, 0 failed):
   to 0; a folder that is not there. `cache_max` of 1 byte and of 1 TiB.
   A folder that cannot be made: a warning, the same bytes.
 - Two builds at once into one cold cache (threads; the description
-  without glyph runs, since Skribidi's font collection counter is a known
-  race, designer.md "The build thread"): the same bytes, 13 records, no
-  temporary file; then a warm build.
+  without glyph runs, since Skribidi's font collection counter was a known
+  race, designer.md "The build thread"; pack/layout 0.3.5 fixed it, and
+  `test_designer_build` part 9 builds glyph runs on two threads): the same
+  bytes, 13 records, no temporary file; then a warm build.
 - Video through ffmpeg: cold and warm (the video and its index from one
   record), another argument, another version line, and the same version
   line with another configuration (POSIX: shell wrappers around ffmpeg)

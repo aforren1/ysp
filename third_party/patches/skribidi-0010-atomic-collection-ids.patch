@@ -1,0 +1,71 @@
+Subject: [PATCH] font and attribute collections: an atomic id counter
+
+skb_font_collection_create() and skb_attribute_collection_create() each
+give a new collection the next value of a static counter with ++id. Two
+threads that make collections at once (the designer builds its check
+pack on one thread and a Build on another, each with a font collection
+and an attribute collection for its glyph runs) race on the counter:
+ThreadSanitizer reports both, and two collections can get one id. The id
+keys a collection's entries in a layout's caches.
+
+The add is now atomic (relaxed: only the values must differ):
+__atomic_add_fetch() on GCC and Clang, _InterlockedIncrement() on MSVC.
+One thread gets the same ids as before. Applies after patches 0001 to
+0009; none of them changes these lines.
+---
+diff --git a/src/skb_attribute_collection.c b/src/skb_attribute_collection.c
+--- a/src/skb_attribute_collection.c
++++ b/src/skb_attribute_collection.c
+@@ -5,6 +5,9 @@
+ #include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(_MSC_VER) && !defined(__clang__)
++#include <intrin.h>
++#endif
+ 
+ #include "skribidi/skb_attribute_collection.h"
+ #include "skribidi/skb_attributes.h"
+@@ -41,7 +44,13 @@ skb_attribute_collection_t* skb_attribute_collection_create(void)
+ 	result->attribute_name_lookup = skb_hash_table_create();
+ 	result->attribute_group_lookup = skb_hash_table_create();
+ 
+-	result->id = ++id;
++	// Collections made on two threads at once must not get one id: the
++	// counter is shared, so its add is atomic.
++#if defined(_MSC_VER) && !defined(__clang__)
++	result->id = (uint32_t)_InterlockedIncrement((volatile long*)&id);
++#else
++	result->id = __atomic_add_fetch(&id, 1, __ATOMIC_RELAXED);
++#endif
+ 
+ 	return result;
+ }
+diff --git a/src/skb_font_collection.c b/src/skb_font_collection.c
+--- a/src/skb_font_collection.c
++++ b/src/skb_font_collection.c
+@@ -4,6 +4,9 @@
+ #include <assert.h>
+ #include <float.h>
+ #include <string.h>
++#if defined(_MSC_VER) && !defined(__clang__)
++#include <intrin.h>
++#endif
+ 
+ #include "SheenBidi/SBScript.h"
+ #include "hb.h"
+@@ -330,7 +333,13 @@ skb_font_collection_t* skb_font_collection_create(void)
+ 	skb_font_collection_t* result = skb_malloc(sizeof(skb_font_collection_t));
+ 	memset(result, 0, sizeof(skb_font_collection_t));
+ 
+-	result->id = ++id;
++	// Collections made on two threads at once must not get one id: the
++	// counter is shared, so its add is atomic.
++#if defined(_MSC_VER) && !defined(__clang__)
++	result->id = (uint32_t)_InterlockedIncrement((volatile long*)&id);
++#else
++	result->id = __atomic_add_fetch(&id, 1, __ATOMIC_RELAXED);
++#endif
+ 	result->fonts_free_list = SKB_INVALID_INDEX;
+ 
+ 	return result;

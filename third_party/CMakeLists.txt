@@ -73,14 +73,14 @@ endif()
 set(patches "")
 foreach(name skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback
         skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme skribidi-0007-monotone-clusters
-        skribidi-0008-editor-empty-text skribidi-0009-line-end-offset)
+        skribidi-0008-editor-empty-text skribidi-0009-line-end-offset skribidi-0010-atomic-collection-ids)
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/patches/${name}.patch sha)
     list(APPEND patches "sha256:${sha}")
 endforeach()
 string(JOIN "," patches ${patches})
 # Each source file a patch changes.
 set(tree_differs OFF)
-foreach(src skb_layout skb_font_collection skb_text skb_editor skb_rich_layout)
+foreach(src skb_layout skb_font_collection skb_text skb_editor skb_rich_layout skb_attribute_collection)
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/skribidi/src/${src}.c src_sha)
     file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/MANIFEST.sha256 src_line REGEX " skribidi/src/${src}\\.c$")
     string(REGEX MATCH "^[0-9a-f]+" src_want "${src_line}")

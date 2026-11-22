@@ -42,9 +42,10 @@
 
 static double ylay__now_us(void) {
 #if defined(_WIN32)
-    static LARGE_INTEGER f;
-    LARGE_INTEGER c;
-    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    /* read at each call, not kept in a static: libraries on two threads
+     * time their work at once (v0.3.5) */
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&c);
     return (double)c.QuadPart * 1e6 / (double)f.QuadPart;
 #else
@@ -169,15 +170,16 @@ static int ylay__grow(void** p, uint32_t* cap, uint32_t need, size_t size) {
     return 1;
 }
 
-static ylay_versions ylay__static_versions = {
-    YLAY_VERSION_STRING, YLAY_SKRIBIDI_COMMIT, YLAY_PATCHES, "",
+/* Constant, so threads that call ylay_get_versions() or ylay_create() at
+ * once share it with no write (v0.3.5: the HarfBuzz field was written at
+ * each call). HarfBuzz is compiled in from the vendored tree, so its
+ * hb_version_string() is this HB_VERSION_STRING. */
+static const ylay_versions ylay__static_versions = {
+    YLAY_VERSION_STRING, YLAY_SKRIBIDI_COMMIT, YLAY_PATCHES, HB_VERSION_STRING,
     YLAY_SHEENBIDI_COMMIT, YLAY_LIBUNIBREAK_TAG, YLAY_BUDOUXC_COMMIT,
 };
 
-const ylay_versions* ylay_get_versions(void) {
-    ylay__static_versions.harfbuzz = hb_version_string();
-    return &ylay__static_versions;
-}
+const ylay_versions* ylay_get_versions(void) { return &ylay__static_versions; }
 
 int ylay_create(ylay_lib** out, const ylay_desc* d) {
     ylay_lib* L;

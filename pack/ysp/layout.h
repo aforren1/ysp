@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.3.4 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.5 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -24,7 +24,8 @@
  *       // .w = b.w, .h = b.h, so every run shares the block's origin.
  *       ylay_stamp(L, &b, line, sizeof line);    // versions and font hashes
  *
- *   Threads: a ylay_lib is for one thread, with its yol_ctx.
+ *   Threads: a ylay_lib is for one thread, with its yol_ctx. Libraries on
+ *   different threads may be made, used and destroyed at once (v0.3.5).
  *
  *   v0.2.0 (2026-11-18): font fallback past the script (Skribidi patch
  *   0003). A character that no font supporting its run's script maps, such
@@ -98,6 +99,16 @@
  *   Command+Right on macOS, a triple click and a drag by lines selected the
  *   LF. docs/layout.md, Patch 0009. The pack tool and the player do not
  *   call the editor. The stamp's patch field lists nine hashes.
+ *
+ *   v0.3.5 (2026-11-22): libraries on two threads at once. Skribidi patch
+ *   0010 makes the id counters of skb_font_collection_create() and
+ *   skb_attribute_collection_create() atomic: two ylay_create() calls at
+ *   once (the designer's check pack and its Build) raced on them, and two
+ *   collections could get one id. ylay_get_versions() no longer writes its
+ *   static at each call: the versions are constant. ThreadSanitizer
+ *   reported all three (docs/layout.md, Patch 0010). The layout and the API
+ *   do not change; the stamp's patch field lists ten hashes, and the
+ *   tree-differs check takes skb_attribute_collection.c too.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -111,7 +122,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.3.4"
+#define YLAY_VERSION_STRING "0.3.5"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
@@ -130,7 +141,7 @@ typedef struct ylay_versions {
                                    * the order they apply, comma-separated, then
                                    * ",tree-differs" when the patched source does
                                    * not match third_party/MANIFEST.sha256         */
-    const char* harfbuzz;         /* hb_version_string(), e.g. "14.6.0"            */
+    const char* harfbuzz;         /* HB_VERSION_STRING, e.g. "14.6.0"              */
     const char* sheenbidi;        /* commit                                         */
     const char* libunibreak;      /* tag                                            */
     const char* budouxc;          /* commit                                         */
