@@ -508,10 +508,15 @@ typedef struct pl_sim_desc {
     ypak_desc   pack;           /* in memory; the caller keeps it until pl_close() */
     const char* def_text; size_t def_len;   /* NULL: the pack's experiment */
     uint64_t    seed;
-    const yrig_profile* rig;    /* NULL: the built-in simulated rig          */
+    const yrig_profile* rig;    /* NULL: the built-in simulated rig. 0.18.0:
+                                 * a profile meets needs as pl_check_desc.rig
+                                 * does, and a relative signal role with the
+                                 * profile's signal takes its adapter        */
     const ycol_cal* cal;        /* the display's calibration, or NULL: the
                                  * nominal one for a definition that requires
-                                 * one (a need), identity for any other      */
+                                 * one (a need), identity for any other. With
+                                 * a rig, a required calibration is met only
+                                 * as in pl_check()                         */
     int         n_fields; pl_field_arg fields[PL_MAX_FIELDS];
     const char* out_dir;        /* the data set's folder; must not exist    */
     const char* participant;    /* the scripted participant of the trials
@@ -1115,9 +1120,11 @@ int  pl_sim_frame(pl_player* p, bool draw);
  * session at the next pl_sim_frame(). A key goes to every collector as an
  * SDL scancode; a choice is the running template's choice by index, with
  * its own kind and control; a sample is a signal role's, by its index in
- * the definition, in the role's units (a relative role's: counts, at the
- * stand-in gain of 1). 0, or < 0 refused (a time out of range, a full
- * queue, no such choice or role). */
+ * the definition: an absolute role's position in the role's units; a
+ * relative role's counts, at the profile's scale (per_count, through its
+ * view, sign and bounds) when pl_sim_desc.rig has the role's signal, else
+ * at the stand-in gain of 1 (a role unit a count). 0, or < 0 refused (a
+ * time out of range, a full queue, no such choice or role). */
 int  pl_sim_key(pl_player* p, int64_t t_ns, int scancode, bool down);
 int  pl_sim_choice(pl_player* p, int64_t t_ns, int choice, bool down);
 int  pl_sim_sample(pl_player* p, int64_t t_ns, int role, float x, float y);

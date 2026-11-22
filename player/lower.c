@@ -1855,20 +1855,24 @@ static int pl_cal_load(pl_player* p) {
     long n;
     ycol_ctx_desc cxd;
     static const ycol_rgb gray = { 0.0, 0.0, 0.0 };
-    /* the stepped session reads no file: its caller gives the calibration */
-    if (!path && p->have_rig && p->rig->display.calibration[0] && !p->sim.on && !p->checking) {
+    /* the caller's calibration: pl_check_desc.cal, pl_sim_desc.cal */
+    const ycol_cal* given = p->sim.on ? p->sim.cal : p->check_cal;
+    /* pl_check() and the stepped session read no file: with a profile, its
+     * calibration meets a required one when the file passed its check and
+     * the caller gives it */
+    bool rig_cal = p->stand_in && p->have_rig && p->rig->display.calibration[0] && p->rig->display.check == YRIG_CHECK_OK && given;
+    if (!path && p->have_rig && p->rig->display.calibration[0] && !p->stand_in) {
         snprintf(joined, sizeof joined, "%s/%s", p->rig->dir, p->rig->display.calibration);
         path = joined;
     }
     if (!path && p->sim.on && p->sim.cal) {
         memcpy(&p->cal, p->sim.cal, sizeof p->cal);
+        /* with no profile the given calibration meets the need (0.16.0) */
+        if (p->def->calibration_required && p->have_rig && !rig_cal) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
     } else if (!path) {
         if (p->def->calibration_required && p->stand_in) {
-            /* pl_check(): player_make_rig's nominal calibration stands in.
-             * A profile whose calibration file passed its check meets the
-             * need, and the caller gives that calibration in d->cal */
-            bool met = p->checking && p->have_rig && p->rig->display.calibration[0] && p->rig->display.check == YRIG_CHECK_OK && p->check_cal;
-            if (!met) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
+            /* player_make_rig's nominal calibration stands in */
+            if (!rig_cal) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
             if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);
             else if (pl_check_nominal_cal(&p->cal) < 0) { pl_fail(p, "the stand-in calibration"); return -1; }
         } else if (p->def->calibration_required) {
@@ -1934,10 +1938,10 @@ static int pl_roles_bind(pl_player* p) {
         r->rig = rr && rr->family[0] ? rr : NULL;
         r->trigger = pl_trigger_channel(p, r->def->name);
         r->rule_out = -1;
-        /* pl_check(): a required role that the keyboard cannot take needs a
-         * device in the rig profile, unless pl_check_desc.rig binds one;
-         * --sim binds none */
-        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !(p->checking && r->rig))
+        /* pl_check() and the stepped session: a required role that the
+         * keyboard cannot take needs a device in the rig profile, unless
+         * their profile binds one; --sim binds none */
+        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !r->rig)
             pl_need_add(p, PL_NEED_DEVICE, r->def->name, r->def->direction);
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
@@ -2150,11 +2154,12 @@ static int pl_roles_tier(pl_player* p) {
         int tier;
         if (!r->def->min_tier) continue;
         if (p->stand_in) {
-            /* pl_check() with a profile: a real start's tier (below); met,
+            /* pl_check() and the stepped session with a profile: a real
+             * start's tier (below); met,
              * no need. ysp/rigfile.h gives a role tier 1 or UNKNOWN, so a
              * need that stays is at UNKNOWN, as with no profile */
             tier = YIN_TIER_UNKNOWN;
-            if (p->checking && p->have_rig && r->def->direction == 0) {
+            if (p->have_rig && r->def->direction == 0) {
                 yin_source none;
                 memset(&none, 0, sizeof none);
                 tier = (int)yrig_source_role(p->rig, r->def->name, none).tier;
@@ -2577,17 +2582,20 @@ static int pl_fields_init(pl_player* p) {
 extern int pl_columns_build(pl_player* p);
 extern int pl_channels_assign(pl_player* p);
 
-/* pl_check(): what a real run asks of the rig for each signal role, and
- * gain 1 as the --sim adapter of a relative role (a role's units a count),
- * so the check goes on where --sim would ask for --sim-gain. */
+/* pl_check() and the stepped session: what a real run asks of the rig for
+ * each signal role that their profile does not meet, and gain 1 as the
+ * --sim adapter of such a relative role (a role's units a count), so the
+ * load goes on where --sim would ask for --sim-gain. */
 static void pl_check_sigroles(pl_player* p) {
     int i;
     for (i = 0; i < p->def->n_sigroles; i++) {
         const yexp_sigrole* r = &p->def->sigroles[i];
-        /* pl_check_desc.rig's signal for the role: the need is met, and the
-         * role takes the profile's adapter, whose checks then run (host.c's
-         * sigrole(), v2_rig_signals()) */
-        if (p->checking && p->have_rig && yrig_find_signal(p->rig, r->name)) continue;
+        /* the profile's signal for the role (pl_check_desc.rig,
+         * pl_sim_desc.rig): the need is met, and the role takes the
+         * profile's adapter, whose checks then run (host.c's sigrole(),
+         * v2_rig_signals()); a stepped session's samples are then counts at
+         * the profile's scale */
+        if (p->have_rig && yrig_find_signal(p->rig, r->name)) continue;
         pl_need_add(p, PL_NEED_SIGNAL, r->name, r->required ? 1 : 0);
         if ((r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative)) &&
             p->args.n_gains < (int)(sizeof p->args.gains / sizeof p->args.gains[0])) {

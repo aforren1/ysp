@@ -482,17 +482,17 @@ name = "a role's min_tier goes to stderr, not the needs"
 test = "check"
 why = "oddball's resp has min_tier 2: role_tier:resp:2, and pl_check() writes nothing."
 find = '''        if (p->stand_in) {
-            /* pl_check() with a profile: a real start's tier'''
+            /* pl_check() and the stepped session with a profile: a real'''
 replace = '''        if (false) {
-            /* pl_check() with a profile: a real start's tier'''
+            /* pl_check() and the stepped session with a profile: a real'''
 
 [[mutant]]
 id = "ck-10"
 name = "a keyboard role needs a device"
 test = "check"
 why = "A required input role that lists the keyboard takes it in a real run: rdk lists no device need."
-find = '''        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !(p->checking && r->rig))'''
-replace = '''        if (p->stand_in && r->def->required && !(p->checking && r->rig))'''
+find = '''        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !r->rig)'''
+replace = '''        if (p->stand_in && r->def->required && !r->rig)'''
 
 [[mutant]]
 id = "ck-11"
@@ -700,9 +700,9 @@ test = "sim"
 env = { PL_SIM_CASES = "display" }
 why = "A session lists what a real run asks, as pl_check() (oddball's resp)."
 find = '''        if (p->stand_in) {
-            /* pl_check() with a profile: a real start's tier'''
+            /* pl_check() and the stepped session with a profile: a real'''
 replace = '''        if (p->checking) {
-            /* pl_check() with a profile: a real start's tier'''
+            /* pl_check() and the stepped session with a profile: a real'''
 
 [[mutant]]
 id = "ls-09"
@@ -732,7 +732,7 @@ id = "p18-01"
 name = "a role the profile binds still needs a device"
 test = "check"
 why = "0.18.0: the full profile binds oddball's trig: device:trig:1 is gone."
-find = ''' && !(p->checking && r->rig))
+find = ''' && !r->rig)
             pl_need_add(p, PL_NEED_DEVICE'''
 replace = ''')
             pl_need_add(p, PL_NEED_DEVICE'''
@@ -758,15 +758,15 @@ id = "p18-04"
 name = "a calibration that failed its check meets the need"
 test = "check"
 why = "0.18.0: afc2 with a profile whose calibration file changed keeps calibration::0."
-find = ''' && p->rig->display.check == YRIG_CHECK_OK && p->check_cal;'''
-replace = ''' && p->check_cal;'''
+find = ''' && p->rig->display.check == YRIG_CHECK_OK && given;'''
+replace = ''' && given;'''
 
 [[mutant]]
 id = "p18-05"
 name = "the profile's calibration meets the need with no calibration given"
 test = "check"
 why = "0.18.0: the check reads no file; afc2 with the profile and d.cal NULL keeps calibration::0."
-find = ''' && p->rig->display.check == YRIG_CHECK_OK && p->check_cal;'''
+find = ''' && p->rig->display.check == YRIG_CHECK_OK && given;'''
 replace = ''' && p->rig->display.check == YRIG_CHECK_OK;'''
 
 [[mutant]]
@@ -774,7 +774,7 @@ id = "p18-06"
 name = "the check reads the profile's calibration file"
 test = "check"
 why = "0.18.0: pl_check() reads no file but the pack; afc2 with the profile and d.cal NULL keeps calibration::0."
-find = '''p->rig->display.calibration[0] && !p->sim.on && !p->checking) {'''
+find = '''p->rig->display.calibration[0] && !p->stand_in) {'''
 replace = '''p->rig->display.calibration[0] && !p->sim.on) {'''
 
 [[mutant]]
@@ -782,7 +782,7 @@ id = "p18-07"
 name = "a signal the profile has is still a need"
 test = "check"
 why = "0.18.0: visuomotor and bimanual with the profile's signals need only the participant field."
-find = '''        if (p->checking && p->have_rig && yrig_find_signal(p->rig, r->name)) continue;'''
+find = '''        if (p->have_rig && yrig_find_signal(p->rig, r->name)) continue;'''
 replace = ''''''
 
 [[mutant]]
@@ -802,3 +802,54 @@ why = "0.18.0: p->rig stays zero, so no role is bound and no view is the profile
 find = '''        if (!p->check_rig) return 0;
         memcpy(p->rig, p->check_rig, sizeof *p->rig);'''
 replace = '''        if (!p->check_rig) return 0;'''
+
+# --- p18-10 to p18-14: the stepped session with a profile (sim_test.c,
+# case_rig): the check's rules, shared, and the profile's adapters ------
+
+[[mutant]]
+id = "p18-10"
+name = "the stepped session takes no role tier from its profile"
+test = "sim"
+env = { PL_SIM_CASES = "rig" }
+why = "0.18.0: oddball with the dev profile: the session's needs equal the check's (no role_tier:resp)."
+find = '''            if (p->have_rig && r->def->direction == 0) {'''
+replace = '''            if (p->checking && p->have_rig && r->def->direction == 0) {'''
+
+[[mutant]]
+id = "p18-11"
+name = "a role the session's profile binds still needs a device"
+test = "sim"
+env = { PL_SIM_CASES = "rig" }
+why = "0.18.0: oddball with the dev profile: no device:trig, as the check."
+find = ''' && !r->rig)
+            pl_need_add(p, PL_NEED_DEVICE'''
+replace = ''' && !(p->checking && r->rig))
+            pl_need_add(p, PL_NEED_DEVICE'''
+
+[[mutant]]
+id = "p18-12"
+name = "the stepped session keeps gain 1 for a role the profile has"
+test = "sim"
+env = { PL_SIM_CASES = "rig" }
+why = "0.18.0: decision 14: the profile's adapter (2 px a count); --sim --rig's data, and the reach's out_x 120."
+find = '''        if (p->have_rig && yrig_find_signal(p->rig, r->name)) continue;'''
+replace = '''        if (p->checking && p->have_rig && yrig_find_signal(p->rig, r->name)) continue;'''
+
+[[mutant]]
+id = "p18-13"
+name = "the session's calibration meets a required one whatever its profile says"
+test = "sim"
+env = { PL_SIM_CASES = "rig" }
+why = "0.18.0: afc2 with the changed profile and a calibration given: calibration::0, as the check."
+find = '''        if (p->def->calibration_required && p->have_rig && !rig_cal) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
+'''
+replace = ''''''
+
+[[mutant]]
+id = "p18-14"
+name = "the stepped session's calibration is not the one its caller gives"
+test = "sim"
+env = { PL_SIM_CASES = "rig" }
+why = "0.18.0: afc2 with the room profile and pl_sim_desc.cal: the need is met, as in the check."
+find = '''    const ycol_cal* given = p->sim.on ? p->sim.cal : p->check_cal;'''
+replace = '''    const ycol_cal* given = p->check_cal;'''

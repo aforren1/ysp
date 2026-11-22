@@ -1755,14 +1755,29 @@ tests and mutation lists, `docs/player.md`, `docs/status.md`.
     `profile.json` for one rig sees it on every other project. Part V may
     want the check's issue to name the profile.
 
+**P2: the stepped session takes the profile** (decision 14, accepted
+2026-11-22; the plan had given this player change to no part).
+`pl_sim_load()` with `pl_sim_desc.rig` runs the same rules as the check:
+the gates in `lower.c` key on "a stand-in load with a profile"
+(`p->stand_in && p->have_rig`), not on `p->checking`, so there is one copy
+of each rule. Its needs and refusals equal `pl_check()`'s with the same
+profile and with `pl_sim_desc.cal` as `cal`. With a profile, a given
+calibration meets a required one only when the profile names a
+calibration whose check is OK; with no profile, as in 0.16.0, a given one
+meets it. A relative signal role whose signal is in the profile takes the
+profile's adapter, so **a sample's meaning changes**: through
+`pl_sim_sample()`, a relative role's x and y are a raw mouse's counts at
+the profile's `per_count` (converted through its view, with its sign and
+bounds), not role units at gain 1. Part G or V must turn the pane's
+mouse movement into counts at that scale when a profile is chosen (for
+example, divide the role-unit motion by the profile's scale), or the
+preview's hand moves by the profile's factor. player.md, "Time and
+input", has the table. With no profile, the stepped session's bytes are
+0.17.0's (248 files).
+
 **Found wrong or missing in the plan.**
-- Decision 14 (the preview takes the profile's signal adapters) needs a
-  player change that no part owns: `pl_sim_load()` with a `rig` still
-  lists the needs as with none and gives every relative signal role
-  gain 1 (`pl_check_sigroles()`), and `pl_sim_sample()` documents its
-  samples as counts at gain 1. P did not change the stepped session: it
-  changes what the preview's samples mean, which is part G's and V's
-  call. The check's code is ready to share (it keys on `p->checking`).
+- Decision 14 needed a player change that no part owned; built as P2,
+  above.
 - The brief's list of git-ignored folders to copy missed `sheenbidi`,
   `skribidi`, `skribidi-extra` and `stb`; `YSP_BUILD_LAYOUT` does not
   configure without them.

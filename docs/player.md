@@ -2,7 +2,9 @@
 
 Status: v0.18.0, 2026-11-22 (0.18.0: `--version`; `--sim` stops on
 SIGTERM as a real run stops on Shift+Esc; `pl_check_desc.rig`, the check
-against a rig profile, [With a rig profile](#with-a-rig-profile-0180);
+against a rig profile, [With a rig profile](#with-a-rig-profile-0180),
+and the stepped session's `pl_sim_desc.rig` with the same rules and the
+profile's signal adapters;
 0.17.0: the stepped session draws on its
 caller's GL context through ysp/gfx.h 0.23.0, with the programs of a
 `share` gfx, [The gfx on a GL context](#the-gfx-on-a-gl-context);
@@ -533,11 +535,12 @@ roles by name, a profile that binds `resp` to an xid refuses every
 definition whose `resp` lists only the keyboard; a real start with that
 profile refuses it too.
 
-Not done: the stepped session (`pl_sim_load()` with `pl_sim_desc.rig`)
-still lists its needs as with no profile, and still gives every relative
-signal role gain 1, not the profile's adapter. Decision 14 of the plan
-asks for the profile's adapters in the preview; that is a change to the
-stepped session's samples (`pl_sim_sample()` takes counts at gain 1).
+The stepped session (`pl_sim_load()` with `pl_sim_desc.rig`) applies
+these rules with the same code: its needs and refusals equal `pl_check()`'s
+with the same profile and calibration (`pl_sim_desc.cal` as `cal`), and a
+relative signal role that the profile has a signal for takes the
+profile's adapter ([The stepped session](#reference-the-stepped-session),
+"Time and input").
 
 ### What it does not do
 
@@ -693,8 +696,8 @@ After 1, the frames are done, and `pl_close()` writes the last rows and
 | Field of `pl_sim_desc` | Meaning |
 |---|---|
 | `pack`, `def_text`, `def_len`, `seed` | As `pl_check_desc`'s. Keep the pack's memory until `pl_close()`. |
-| `rig` | A rig profile in memory, or `NULL`: the built-in simulated rig, which is `pl_check()`'s stand-ins (570 mm away, 1920 px over 518.4 mm, no devices). The session reads no rig file. |
-| `cal` | The display's calibration, or `NULL`: the nominal one of `pl_check_nominal_cal()` for a definition with `"calibration": "required"` (a need), identity for any other. |
+| `rig` | A rig profile in memory, or `NULL`: the built-in simulated rig, which is `pl_check()`'s stand-ins (570 mm away, 1920 px over 518.4 mm, no devices). The session reads no rig file. 0.18.0: a profile meets needs and runs the loader's checks as `pl_check_desc.rig` does ([With a rig profile](#with-a-rig-profile-0180)), and gives its signals' adapters to the relative signal roles. Its devices never open. |
+| `cal` | The display's calibration, or `NULL`: the nominal one of `pl_check_nominal_cal()` for a definition with `"calibration": "required"` (a need), identity for any other. With no `rig`, a given `cal` meets a required calibration. With a `rig` (0.18.0), it meets it only when the profile names a calibration whose check is OK, as in `pl_check()`; else the need is listed and `cal` still stands in. |
 | `n_fields`, `fields` | Session fields. A required field that is not given takes the check's stand-in and is a need. |
 | `out_dir` | The data set's folder. It must not exist. |
 | `participant`, `rt_s` | The scripted participant of the trials that `live()` leaves to it, as `--participant` and `--rt` (`NULL` and 0: `correct`, 0.3 s). |
@@ -722,9 +725,16 @@ The input reaches the session at the next `pl_sim_frame()`.
 - A choice is the running template's choice by its index, with its own
   kind and control, as the scripted participant presses it.
 - A sample is a signal role's (by its index in the definition), as a
-  `--samples` row: an absolute role's in its units, a relative role's in
-  counts at the stand-in gain of 1 (`PL_NEED_SIM_GAIN`). Samples go in
-  time order.
+  `--samples` row, and goes in time order. What its x and y mean:
+
+  | Role | No `rig`, or a `rig` with no signal for the role | A `rig` with the role's signal (0.18.0) |
+  |---|---|---|
+  | absolute (`position2d`, no `allow_relative`) | a position in the role's units | the same; the loader refuses a profile's signal for such a role (tier 1) |
+  | relative (`position2d_relative`, or `allow_relative`) | counts, one role unit a count (the stand-in gain 1, `PL_NEED_SIM_GAIN`) | a raw mouse's counts through the profile's adapter: `per_count` for each lane in the signal's units, converted to the role's through the profile's `view` (`yrig_units_factor()`), with its sign and its bounds, as `--sim --rig` with no `--sim-gain` and as a real run |
+
+  The two columns give the same data only when the profile's scale is one
+  role unit a count with no bounds. `test_player_sim` (12) checks the
+  second column against `--sim --rig` file for file.
 
 Up to 256 keys and choices and 8,192 samples wait for a frame. A call
 past that, or with a time out of range, gives < 0 and changes nothing.
@@ -1733,10 +1743,12 @@ was started. Nothing here is a timing claim.
 | `player_test.py` `t_p18_version` | `--version` prints `ysp_player 0.18.0` and nothing else, exit 0; 0.17.0 gave exit 2 and the usage |
 | `player_test.py` `t_p18_sigterm` | 4,000 trials of 16 s; SIGTERM once 4 KB of rows are in `trials.csv`: exit 3, `aborted` with reasons `["request"]`, `trials_written` equal to the rows, `trial_index` the next trial (or `null` between trials); the output line says which. The rows equal, byte for byte, those of the same session run unstopped with `--max-trials N`, whose output is the one end line and whose `session.json` has no `aborted`. 0.17.0 ended by the signal (status -15) with no `aborted` |
 | `test_player_check` `case_rig` | Profiles parsed with the rig folder's files: a checked bounds loopback (tier 1) and the nominal calibration. oddball with resp (xid) and trig bound and a view: `display_tier::1 field:participant:0`, also with resp's `min_tier` 1; resp bound with no loopback, trig unbound, no view: `device`, `role_tier` and `view` stay. afc2: the calibration need goes only when the profile's calibration passed its check and `cal` is given. visuomotor and bimanual with the profile's signals: `field:participant:0`. resp bound to `line`: tier 1, `role 'resp': the rig binds it to family 'line', which the role does not list`. bimanual's left in `workspace_cm`: tier 1, `... which do not convert`. rdk, stroop and the sound pack: the same status, message and needs with a profile as with none. The loader's role and signal checks ran (not in `skipped`); no screen, data set, writer, ring or device opened; the caller's profile is not changed |
-| `--sim`'s bytes | `player_test.py` with the 0.17.0 and 0.18.0 `ysp_player` (84 cases): 2,512 data files equal but `player_version` and the hash of `player_make_rig`'s profile, whose `written` time differs; 2 profiles differ in that time; 499 files in `mkdtemp()` folders were not compared. The repository's projects (rdk, oddball, afc2, stroop, visuomotor, bimanual, rdk silent and with `--max-trials`): every data file, the output and the exit code equal; with one profile file for both, `session.json` differs only in `player_version` |
-| ctest (Release, examples and the Test Engine on) | 144 of 144 |
-| Sanitizers (`setarch -R`) | ASan and UBSan: `check_test.c` with the player's sources (128 checks) and `mut_test.c` as the player for 4 `player_test.py` cases, the SIGTERM case among them: no report |
-| Mutants | `player_lower.toml` p18-01 to p18-09 and the moved ck-09, ck-10, ls-08: 12 of 12 killed. `player_main.toml` (new) pm-01 to pm-05: 5 of 5 killed. `player_run.toml` p18-r1: killed |
+| `test_player_sim` (12) `rig` (part P2) | For the seven packs, three profiles (one that binds oddball's roles with a tier 1 loopback and a view; one with no role, a calibration, a view of 1024 px over 320 mm and the signals of hand, left and right; that one with its calibration's check failed) and a calibration given or not: 42 sessions whose status, message and needs equal `pl_check()`'s with the same profile and calibration, five of them also by value. visuomotor (hand at 2 and -1.5 px a count) and bimanual (16 px a count, 0.5 cm through the view) with samples and the profile: the session's data equal `ysp_player --sim --rig` with no `--sim-gain`, file for file. A relative role's two samples of 30 counts: with the profile, 120 px and the outcome `out` (`out_x` 120); with none, 60 px and `late` |
+| The stepped session with no `rig` | The 0.17.0 and 0.18.0 `test_player_sim` (all cases, `--keep`) on the same packs: 248 data files equal but `player_version` and the version in `screen`; the 5 `--sim --rig` `session.json` files differ only in `rig_profile_sha256`, from `player_make_rig`'s `written` time |
+| `--sim`'s bytes | `player_test.py` with the 0.17.0 and 0.18.0 `ysp_player` (84 cases): 2,512 data files equal but `player_version` and the hash of `player_make_rig`'s profile, whose `written` time differs; 2 profiles differ in that time; 499 files in `mkdtemp()` folders were not compared. The repository's projects (rdk, oddball, afc2, stroop, visuomotor, bimanual, rdk silent and with `--max-trials`), with one profile file for both players: 54 of 54 data files, outputs and exit codes equal but `player_version` (run again after P2) |
+| ctest (Release, examples and the Test Engine on) | 144 of 144, also after P2 |
+| Sanitizers (`setarch -R`) | ASan and UBSan: `check_test.c` with the player's sources (128 checks), `sim_test.c`'s cases `rig`, `display` and `input` (223 checks), and `mut_test.c` as the player for 4 `player_test.py` cases, the SIGTERM case among them: no report |
+| Mutants | `player_lower.toml` p18-01 to p18-09 and the moved ck-09, ck-10, ls-08; p18-10 to p18-14 for the stepped session (P2): 17 of 17 killed. `player_main.toml` (new) pm-01 to pm-05: 5 of 5 killed. `player_run.toml` p18-r1: killed |
 
 ### The session on a GL context (0.17.0, 2026-11-20)
 
