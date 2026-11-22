@@ -1709,8 +1709,8 @@ of the new texture and programs. On llvmpipe a cold adoption takes 18 to
 Branch `step6-x`, from `designer-step6` (`55f27ea`). Part X adds the
 process layer `dsg_proc_*` to `designer/core/platform.c` and the plan's
 declarations to `dsg.h`, with one change: `dsg_proc_stop()` returns
-`int` (decision 7, below). The
-version of `dsg.h` stays 0.3.0: part S makes it 0.4.0. Part X also
+`int` (decision 7, below). The version of `dsg.h` stays 0.3.0: part S
+makes it 0.4.0. Part X also
 changed `designer/CMakeLists.txt` (S's file): the target `test_child`,
 and its path as the second argument of `test_designer_platform`. The
 plan gives `test_child` to S, but X merges before S, and X's test needs
@@ -1760,7 +1760,7 @@ it.
   runs: the child is left running, and the watch thread is detached; it
   blocks in `waitpid()`, so no zombie stays, then frees the struct.
   `wake` is called under a second lock with a "gone" flag, so it is
-  never called after `dsg_proc_free()` returns. Windows has no zombie:
+  never called after `dsg_proc_free()` returns. Windows keeps no zombie:
   free joins and closes the handles.
 - **WebAssembly.** `dsg_proc_start()` fails with "no processes in a
   browser"; the other calls do nothing (`dsg_proc_poll()` gives 1 and
@@ -1884,7 +1884,7 @@ tree (examples and the Test Engine on, `DISPLAY` unset): 144 of 144.
 | x-11: the raw wait status | exit: 1792 |
 | x-12: a signal as a positive status | kill: 9 |
 | x-13: Stop sends SIGKILL | stop: -9, no "got term" |
-| x-14: Kill sends SIGTERM | kill: 5 is not -9 (the child took it) |
+| x-14: Kill sends SIGTERM | kill: the child does not end in 5 s |
 | x-15: a 1000 ms tick | watch: 671 ms for a line, 551 ms for a file |
 | x-16: no look at the sizes | watch: lines and file late |
 | x-17: no pidfd | watch: the exit after 181 ms |
