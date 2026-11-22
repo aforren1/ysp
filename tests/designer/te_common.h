@@ -34,3 +34,6 @@ void te_register_run(ImGuiTestEngine* e);
 // The player that UiPlatform.player_path names: a buffer that te_run.cpp
 // fills per test (the double's name, or R's fake_player).
 const char* te_run_player();
+// Removes the config folder that te_register_run() made under HOME, if any
+// (a work folder under /tmp, which yrt_user_dir() refuses). After the tests.
+void te_run_cleanup();

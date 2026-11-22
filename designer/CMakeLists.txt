@@ -331,10 +331,12 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     add_executable(test_designer_te ${PROJECT_SOURCE_DIR}/tests/designer/te_test.cpp ${_te_config}/imconfig_designer_te.h
         ${_te_config}/te_common.h ${_te_config}/te_chart.cpp ${_te_config}/te_tables.cpp ${_te_config}/te_panels.cpp
         ${_te_config}/te_preview.cpp
-        # Step 6, part V: run_view_double.c stands in for build.c, run.c and
-        # rig.c until the integration (tests/designer/run_view_double.h).
-        ${_te_config}/te_run.cpp ${_te_config}/run_view_double.h ${_te_config}/run_view_double.c
+        # Step 6: run/* on parts B, R and G, with R's fake_player as the
+        # player (run_view_double.c, part V's stand-in, is not built).
+        ${_te_config}/te_run.cpp
         ${_ui_sources})
+    target_compile_definitions(test_designer_te PRIVATE YSP_TE_FAKE_PLAYER="$<TARGET_FILE:fake_player>")
+    add_dependencies(test_designer_te fake_player)
     target_link_libraries(test_designer_te PRIVATE ysp_designer_te_engine ysp_designer_core ysp_designer_skb ysp_skribidi)
     target_compile_definitions(test_designer_te PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")

@@ -35,14 +35,15 @@
 // DSG_RUN_VIEW_DOUBLE 1: on run_view_double.c (build.c, run.c and rig.c
 // scripted). 0, at the integration: on parts B, R and G, with R's
 // fake_player as the player (YSP_TE_FAKE_PLAYER, its script in place of the
-// built pack). docs/designer.md, "Part V as built", gives the steps.
-#ifndef DSG_RUN_VIEW_DOUBLE
-#define DSG_RUN_VIEW_DOUBLE 1
-#endif
+// built pack). docs/designer.md, "Part V as built", gives the steps; the
+// integration ("Parts B, G, R and V integrated") took them.
+#define DSG_RUN_VIEW_DOUBLE 0
 #include "te_common.h"
 #include "ui.h"
 #include "views.h"
+#if DSG_RUN_VIEW_DOUBLE
 #include "run_view_double.h"
+#endif
 #include "csv.h"
 #include "player.h"   // PL_VERSION_STRING, yrig_dir()
 
@@ -51,9 +52,18 @@
 #include "imgui_te_context.h"
 #include "imgui_te_engine.h"
 
+#include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <thread>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <limits.h>
+#include <unistd.h>
+#endif
 
 #ifndef YSP_TE_FAKE_PLAYER
 #define YSP_TE_FAKE_PLAYER ""
@@ -66,6 +76,10 @@ const char* const kRdk[] = { "pack.json", "experiment.json", "conditions.csv", n
 const char* const kOddball[] = { "pack.json", "experiment.json", "oddball.csv", "standard.png", "target.png", nullptr };
 char g_player[DSG_PATH_MAX] = "/double/ysp_player";
 char g_rig_dir[DSG_PATH_MAX] = "";
+// A config folder that the test made under HOME (the work folder is under
+// one that all users can write, which yrt_user_dir() refuses): removed by
+// te_run_cleanup(). Empty otherwise.
+char g_cfg_home[DSG_PATH_MAX] = "";
 
 void set_env(const char* name, const char* value) {
 #ifdef _WIN32
@@ -173,15 +187,33 @@ bool write_profile(const char* file, const char* rig, double distance_mm, double
 
 #if !DSG_RUN_VIEW_DOUBLE
 // R's fake_player reads its PACK as a script: the test puts one in place of
-// the pack that a Build wrote, and Run then starts it (the pack is no
-// source, so Build's stamp still holds).
+// the pack that a Build wrote, and Run then starts it. dsg_build_stale()
+// takes a pack of another size for another pack, and Run would build again
+// over the script: so the script is padded with comment lines to the pack's
+// size.
 bool fake_script(const char* script) {
     if (!YSP_TE_FAKE_PLAYER[0]) return false;
     snprintf(g_player, sizeof g_player, "%s", YSP_TE_FAKE_PLAYER);
     set_env("YSP_FAKE_PLAYER_VERSION", PL_VERSION_STRING);
     const dsg_build_result* b = ui_build_last();
+    const size_t n = strlen(script);
+    if (!b || b->status != DSG_BUILD_OK || b->size < 0 || (size_t)b->size < n + 2) return false;
+    char* text = (char*)malloc((size_t)b->size);
+    if (!text) return false;
+    memcpy(text, script, n);
+    // lines of '#' and 'x', at most 100 bytes, each ending in a newline
+    for (size_t at = n, left = (size_t)b->size - n; left > 0;) {
+        const size_t line = left > 100 && left - 100 >= 2 ? 100 : left;
+        text[at] = '#';
+        memset(text + at + 1, 'x', line - 1);
+        text[at + line - 1] = '\n';
+        at += line;
+        left -= line;
+    }
     char err[256];
-    return b && b->status == DSG_BUILD_OK && dsg_write_file(b->path, script, strlen(script), err, sizeof err) == 0;
+    const bool ok = dsg_write_file(b->path, text, (size_t)b->size, err, sizeof err) == 0;
+    free(text);
+    return ok;
 }
 #endif
 
@@ -205,9 +237,23 @@ bool start_sim(ImGuiTestContext* ctx, const char* script) {
     return ui_run_active();
 }
 
-// Frames until the run ended, at most n.
+// Frames until done() or the seconds of wall time passed. A run's progress
+// comes from the watch thread's wake-ups, at most 4 a second, and the
+// engine's fast frames take almost no time, so a count of frames is no
+// bound.
+template <class F> bool wait_for(ImGuiTestContext* ctx, double seconds, F done) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    while (!done() && std::chrono::steady_clock::now() < end) {
+        ctx->Yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return done();
+}
+
+// Frames until the run ended: at least n, then up to 10 s.
 bool wait_end(ImGuiTestContext* ctx, int n) {
     for (int i = 0; i < n && ui_run_active(); i++) ctx->Yield();
+    wait_for(ctx, 10.0, [] { return !ui_run_active(); });
     ctx->Yield();
     return !ui_run_active() && ui_run() != nullptr;
 }
@@ -249,9 +295,30 @@ void test_build_table(ImGuiTestContext* ctx) {
                      "'conditions.pstb': ysp_table: line 3, row 2, column 'coherent_direction' (2): a quoted field is not closed", 0, 0,
                      nullptr);
 #else
-    // a quote that does not close, in the table's second row
-    IM_CHECK(te_copy_project("rdk", "run_table", kRdk, dir, sizeof dir));
+    // A quote that does not close, in the table's second row: Build's error
+    // names a row that dsg_csv_place() reads. The designer cannot index such
+    // a table (csv.c refuses what ysp/table.h refuses), so it has no cell to
+    // select.
+    IM_CHECK(te_copy_project("rdk", "run_table_quote", kRdk, dir, sizeof dir));
     IM_CHECK(write_text(dir, "conditions.csv", "coherence,coherent_direction,key_answer\n0.032,0,right\n0.032,\"180,left\n"));
+    IM_CHECK(open_dir(ctx, dir));
+    ctx->ItemClick(run_item(ctx, "Build"));
+    wait_build(ctx);
+    {
+        const dsg_build_result* b = ui_build_last();
+        IM_CHECK(b != nullptr && b->status == DSG_BUILD_FAILED && b->report.n_issues > 0);
+        char entry[128], name[64];
+        int row = -2, col = -1;
+        if (b && b->report.n_issues > 0) {
+            IM_CHECK(dsg_csv_place(b->report.issues[0].message, entry, sizeof entry, &row, &col, name, sizeof name));
+            IM_CHECK_STR_EQ(entry, "conditions.pstb");
+            IM_CHECK_EQ(row, 1);
+        }
+    }
+    // A cell that the designer indexes and the pack tool refuses: a number
+    // of 20 significant digits in the second row's coherent_direction
+    IM_CHECK(te_copy_project("rdk", "run_table", kRdk, dir, sizeof dir));
+    IM_CHECK(write_text(dir, "conditions.csv", "coherence,coherent_direction,key_answer\n0.032,0,right\n0.032,180.12345678901234567890,left\n"));
     IM_CHECK(open_dir(ctx, dir));
 #endif
     ctx->ItemClick(run_item(ctx, "Build"));
@@ -277,10 +344,8 @@ void test_build_table(ImGuiTestContext* ctx) {
     const dsg_sel* s = dsg_doc_selection(ui_doc());
     IM_CHECK_GT(s->buf, 0);
     IM_CHECK_EQ(s->row, row);
-#if DSG_RUN_VIEW_DOUBLE
     IM_CHECK_EQ(s->row, 1);
     IM_CHECK_EQ(s->col, 1);
-#endif
     te_show(ctx, "Text");
 }
 
@@ -299,7 +364,7 @@ void test_sim_end(ImGuiTestContext* ctx) {
     rvd_run_progress(3, "left", "correct", 0.412, "trial 3");
     ctx->Yield();
 #else
-    for (int i = 0; i < 120 && run_info().trials < 3; i++) ctx->Yield();
+    IM_CHECK(wait_for(ctx, 10.0, [] { return run_info().trials >= 3; }));
 #endif
     const char* t = frame_text(ctx);
     IM_CHECK(strstr(t, "Trials written: 3") != nullptr);
@@ -426,6 +491,7 @@ bool rig_folder_ok() {
 }
 
 bool write_rigs() {
+    if (!g_rig_dir[0]) return false;
     return write_profile("profile.json", "desk", 570, 518.4, 1920, "") &&
            write_profile("lab2.json", "lab two", 600, 400, 1280, "\"trig\": {\"family\": \"triggerbox\", \"key\": \"port:/dev/null\"}");
 }
@@ -554,14 +620,64 @@ void test_needs(ImGuiTestContext* ctx) {
     IM_CHECK(has_text(ctx, "The profile gives it no tier"));
 }
 
+#if !DSG_RUN_VIEW_DOUBLE
+// The user's config folder for this process: APPDATA on Windows, HOME on
+// macOS (yrt_user_dir() reads no XDG variable there), XDG_CONFIG_HOME on the
+// others; as test_designer_rig does.
+void set_config_home(const char* dir) {
+#if defined(_WIN32)
+    set_env("APPDATA", dir);
+#elif defined(__APPLE__)
+    set_env("HOME", dir);
+#else
+    set_env("XDG_CONFIG_HOME", dir);
+#endif
+}
+
+bool absolute(const char* path, char* out, size_t cap) {
+#ifdef _WIN32
+    return _fullpath(out, path, cap) != nullptr;
+#else
+    char buf[PATH_MAX];
+    return realpath(path, buf) != nullptr && snprintf(out, cap, "%s", buf) < (int)cap;
+#endif
+}
+
+// Each folder of path that is not there yet.
+bool make_dirs(const char* path) {
+    char p[DSG_PATH_MAX], err[256];
+    if (snprintf(p, sizeof p, "%s", path) >= (int)sizeof p) return false;
+    for (char* c = p + 1; *c; c++) {
+        if (*c != '/' && *c != '\\') continue;
+        if (c[-1] == ':') continue;   // C:\ on Windows
+        const char keep = *c;
+        *c = 0;
+        if (!dsg_is_dir(p) && dsg_make_dir(p, err, sizeof err)) return false;
+        *c = keep;
+    }
+    return dsg_is_dir(p) || dsg_make_dir(p, err, sizeof err) == 0;
+}
+#endif
+
 } // namespace
 
 const char* te_run_player() { return g_player; }
+
+void te_run_cleanup() {
+    char err[256];
+    const char* slash = strrchr(g_cfg_home, '/');
+    if (!g_cfg_home[0] || !slash) return;
+    char parent[DSG_PATH_MAX];
+    snprintf(parent, sizeof parent, "%.*s", (int)(slash - g_cfg_home), g_cfg_home);
+    if (dsg_remove_tree(parent, slash + 1, err, sizeof err)) printf("te_run: %s\n", err);
+    g_cfg_home[0] = 0;
+}
 
 void te_register_run(ImGuiTestEngine* e) {
     // Before any frame: the check thread and the views read these.
     char work[DSG_PATH_MAX], d[DSG_PATH_MAX], err[256];
     static const char* const none[] = { nullptr };
+#if DSG_RUN_VIEW_DOUBLE
     if (te_copy_project("rdk", "run_xdg", none, work, sizeof work)) {
 #ifdef _WIN32
         set_env("APPDATA", work);
@@ -572,6 +688,43 @@ void te_register_run(ImGuiTestEngine* e) {
             dsg_join(g_rig_dir, sizeof g_rig_dir, d, "rig") == 0)
             dsg_make_dir(g_rig_dir, err, sizeof err);
     }
+    (void)none;
+#else
+    // The real rig.c reads yrig_dir(). The user's own rig folder is never
+    // read or written: the test's must differ from it.
+    char real[DSG_PATH_MAX] = "";
+    (void)yrig_dir(real, sizeof real);
+    // absolute: yrt_user_dir() ignores a relative XDG_CONFIG_HOME and takes
+    // HOME/.config, the user's own
+    char rel[DSG_PATH_MAX];
+    if (te_copy_project("rdk", "run_xdg", none, rel, sizeof rel) && absolute(rel, work, sizeof work)) set_config_home(work);
+    if (yrig_dir(d, sizeof d) != YRIG_OK) {
+#ifndef _WIN32
+        // WORK is under a folder that all users can write (/tmp): a folder
+        // of the test's own under HOME/.cache, removed at the end
+        const char* home = getenv("HOME");
+        char cache[DSG_PATH_MAX];
+        if (home && home[0] == '/' && dsg_join(cache, sizeof cache, home, ".cache") == 0 && make_dirs(cache)) {
+            char name[64];
+            snprintf(name, sizeof name, "ysp_designer_te-%d", (int)getpid());
+            if (dsg_join(g_cfg_home, sizeof g_cfg_home, cache, name) == 0 && !dsg_is_dir(g_cfg_home) &&
+                dsg_make_dir(g_cfg_home, err, sizeof err) == 0) {
+                set_config_home(g_cfg_home);
+                printf("te_run: the work folder is under one that all users can write; the config folder is %s\n", g_cfg_home);
+            } else {
+                g_cfg_home[0] = 0;
+            }
+        }
+#endif
+    }
+    if (yrig_dir(d, sizeof d) != YRIG_OK || (real[0] && strcmp(real, d) == 0) || !make_dirs(d)) {
+        // the run/rig_* tests then fail at write_rigs()
+        printf("FAIL: te_run: the test's rig folder '%s' is not its own (the user's: '%s')\n", d, real);
+        g_rig_dir[0] = 0;
+    } else {
+        snprintf(g_rig_dir, sizeof g_rig_dir, "%s", d);
+    }
+#endif
     set_env("YSP_DESIGNER_TEST", "1");
     IM_REGISTER_TEST(e, "run", "build_id")->TestFunc = test_build_id;
     IM_REGISTER_TEST(e, "run", "build_table")->TestFunc = test_build_table;

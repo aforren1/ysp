@@ -374,6 +374,7 @@ int main(int argc, char** argv) {
     ImGuiTestEngine_PrintResultSummary(engine);
 
     ui_shutdown();
+    te_run_cleanup();
     // ImGui's context first: the engine unbinds from it (imgui_te_engine.h).
     ImGui::DestroyContext();
     ImGuiTestEngine_DestroyContext(engine);
