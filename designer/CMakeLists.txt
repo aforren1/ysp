@@ -111,6 +111,28 @@ if(YSP_BUILD_TESTS)
         set_tests_properties(test_designer_build PROPERTIES TIMEOUT 300)
         dsg_test(test_designer_build)
     endif()
+    # Step 6, part R: Run (core/run.c), with fake_player (a script for a
+    # player) and ysp_player --sim. No test starts a real run: dsg_run_args()
+    # refuses one while YSP_DESIGNER_TEST is set.
+    add_executable(fake_player ${PROJECT_SOURCE_DIR}/tests/designer/fake_player.c)
+    target_compile_options(fake_player PRIVATE ${YSP_WARNINGS})
+    set_target_properties(fake_player PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    dsg_test(fake_player)
+    add_executable(test_designer_run ${PROJECT_SOURCE_DIR}/tests/designer/run_test.c)
+    target_link_libraries(test_designer_run PRIVATE ysp_designer_core)
+    target_compile_options(test_designer_run PRIVATE ${YSP_WARNINGS})
+    set_target_properties(test_designer_run PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(test_designer_run PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    if(TARGET ysp_player)
+        set(_dsg_run_player $<TARGET_FILE:ysp_player>)
+        add_dependencies(test_designer_run ysp_player)
+    else()
+        set(_dsg_run_player "")
+    endif()
+    add_test(NAME test_designer_run COMMAND test_designer_run ${CMAKE_CURRENT_BINARY_DIR}/designer_run_work
+        $<TARGET_FILE:fake_player> ${_dsg_run_player})
+    set_tests_properties(test_designer_run PROPERTIES TIMEOUT 120 ENVIRONMENT "YSP_DESIGNER_TEST=1")
+    dsg_test(test_designer_run)
     # Step 5, part A: the preview's core (core/preview.c), headless. GNU ld's
     # --wrap counts heap calls in a tick and holds an attach; neither MSVC's
     # linker nor Apple's has it, so there those checks skip.
