@@ -2464,6 +2464,246 @@ check named):
 - No ThreadSanitizer run: S adds an atomic counter that the watch thread
   writes and the UI thread reads, and no thread.
 
+#### Part B as built (2026-11-22)
+
+Branch `step6-b`, from `designer-step6` (`1110636`). Part B replaces S's
+stub `designer/core/build.c` and adds `tests/designer/build_test.c`
+(`test_designer_build`). No interface changed. One addition outside B's
+files: the test's target in `designer/CMakeLists.txt` (S's file).
+
+**What it does.**
+- **The build thread.** A `yrt_pump`, as the check thread's: SCHED_OTHER
+  with explicit attributes, never elevated, blocked when idle. The job is
+  a slot, not a queue: a post while one waits replaces it (newest wins); a
+  post while one runs waits for it. `dsg_build_busy()` is true from the
+  post to the result. `desc.no_thread` (and a build without threads) runs
+  the job in `dsg_build_wait()`.
+- **Cancel.** Each post gets a number; `dsg_build_cancel()` sets an atomic
+  "canceled up to" to the last number and drops the waiting job (it gives
+  no result). `ypt_options.cancel` reads the atomic, so a running Build
+  stops before its next entry, or after an ffmpeg step that runs, with
+  `DSG_BUILD_CANCELED`, no pack and no temporary file. A post after a
+  cancel has a higher number and runs. `dsg_builder_stop()` cancels, then
+  joins.
+- **One Build.** The stamp first: the description, the definition and each
+  resource's `source` and `from` (a curveset's font), each an absolute
+  path with its size and modification time (size -1: missing). Then
+  `ypt_build(desc_path, PROJECT/build/NAME.ysppak)` with the entry cache in
+  `DSG_CACHE_DIR` and the warnings on `tmpfile()` (a file in `.designer`
+  when `tmpfile()` fails). Then the pack's ID (`ypak_open()` with
+  `YPAK_VERIFY_OPEN`, `ypak_id()`) and size. A source that changes during
+  the build makes the result stale, never the reverse. A folder given as
+  `.` gets its real name (`.../build/NAME.ysppak`, not `..ysppak`).
+- **Issues** (`DSG_FROM_BUILD`): the tool's error line (severity error)
+  and each `warning:` line (severity warning, without the prefix), errors
+  first. The tool's `ypak: ` prefix goes. A definition's place comes from
+  "line N, column M" as the check reads it, with the offset in the saved
+  file; the source description's and the manifest's lines get no place. A
+  table's message keeps its form (`'conditions.pstb': ysp_table: line 3,
+  row 2: ...`), which `dsg_csv_place()` and the tables view read, so a
+  click selects the cell with no new code. A message that starts with a
+  resource's name gets its source: `(source 'conditions.csv')`.
+- **Stale** (`dsg_build_stale()`): no result, one not OK, another
+  revision, a result of another path than `dsg_build_path(p)`, a pack
+  that is gone or has another size, or a source whose size or time is not
+  the stamp's. 2 us for the video case's 4 sources (a stat each).
+- `build.c` defines only the Build section's symbols. Its file stamps and
+  absolute path (`stat()` and `realpath()`; `GetFileAttributesExW()` and
+  `GetFullPathNameW()`) are static in it, because frozen `dsg.h` has no
+  such call in `platform.c`. So `platform.c` is no longer the only file
+  with OS calls.
+
+**The entry cache's bound** (decision 17's knob). After each build (Build
+or check pack, OK or not), `ypt_cache_trim()` to twice the size of the
+pack at the output path, never below `DSG_BUILD_CACHE_FLOOR` (1 GiB).
+- The bound must hold the pack's own records, or each build after a change
+  misses: a record larger than the bound goes right after it is written
+  (pack.md 19), and a miss costs the derivation again (the video case:
+  3,553 ms cold against 238 ms warm, below).
+- The records are about the pack's media, so twice the pack holds the new
+  records beside the old ones of a changed source until the next trim; the
+  floor keeps old versions (an option tried and undone) in a small
+  project.
+- B trims after the build, not through `ypt_options.cache_max`: the tool's
+  trim runs before the new pack exists, so a bound from the last pack
+  would remove the records of media added past it (a first build with
+  more than 512 MB of new media would derive them all again at the next
+  build).
+- The trim runs after every build: whether a build wrote a record cannot
+  be told cheaply (the folder's time moves in steps of 1 to 4 ms here, and
+  a small project's build takes 0.15 ms). A trim costs about 0.9 us a
+  record (below).
+
+**The check pack's skip** (`dsg_build_check_pack()`; decided by
+measurement: yes). The check thread builds the check pack when there is
+none (the first check after an open or a forget) and when the texts or
+the dirty tables change. Only the first case can repeat the last inputs.
+The skip key is the SHA-256 of the description's bytes and, for each
+source it names, the bytes of the designer's own copies under `.designer`
+(the text under check and the unsaved tables: `check.c` writes them again
+before each build, so their time says nothing) or the size and time of
+the project's files. The definition's bytes are in the key, so a kept pack
+never has another text's glyph runs. After a build the key and the pack's
+size and time go to `check.ysppak.key`; a pack that another build replaced
+or that is gone is built again. A size and a time miss a file written
+again in the same clock step at the same size, so no key is kept when a
+source's time is within 2 s (FAT's step, the coarsest) of the pack's, as
+git treats its index; the skip then waits for a later build. Build itself
+never skips (decision 3). Run's staleness keeps the plan's size-and-time
+rule, with that small window open: a write by another program within one
+clock step after the stamp, at the same size.
+
+**Measured.** Linux desktop, i5-14500, Debian 12, kernel 6.11.5-liquorix,
+gcc 12.2, Release (Ninja), ffmpeg 5.1.6, 2026-11-22. Four blocks, each under
+the measuring lock and pinned with `taskset` to CPUs 2 and 4, `DISPLAY` and
+`WAYLAND_DISPLAY` unset; each waited for a 1-minute load below 1.0: 0.65 to
+0.88 before, 0.65 to 1.44 after (other workers). Files on `/tmp` (ext4,
+NVMe), in the page cache. A harness (`bench_b`, not kept) calls the
+designer's functions in process. Milliseconds: median, p95, max. The video
+case is part K's: rdk and a 10 s 1080p clip (testsrc2, MJPEG q 3, 31.2 MB)
+through ffmpeg to MPEG-1 (`-q:v 3 -g 15 -bf 0`, 2 threads).
+
+| What | Runs | Time |
+|---|---|---|
+| Build, warm cache (the builder's `ms`) | 20 | 238.1, 244.7, 265.4 |
+| Build, cold cache | 3 | 3,553, 3,588, 3,588 |
+| Check pack, cold cache | 3 | 3,580, 3,585, 3,585 |
+| Check pack, warm cache, no skip (`ypt_build_text()` alone) | 20 | 237.8, 247.4, 250.5 |
+| Check pack, warm cache, a miss of the skip (key, build, key file, trim) | 20 | 235.2, 244.4, 245.0 |
+| Check pack, a skip | 200 | 0.010, 0.010, 0.019 |
+| The first check after an open (`dsg_check()`, a new checker), skipped | 50 | 11.7, 12.7, 13.2 |
+| The same, the key file removed (a build) | 20 | 242.3, 256.4, 276.2 |
+
+The skip elsewhere: a skip (median), a miss, and `ypt_build_text()` alone
+with the same cache; the difference is the key, its file and the trim.
+
+| Project | Skip | Miss | Build alone |
+|---|---|---|---|
+| oddball (2 records) | 0.013 | 0.174, 0.217, 0.310 | 0.148, 0.203, 0.251 |
+| stroop | 0.017 | 6.374, 6.529, 6.793 | 6.346, 6.443, 6.578 |
+| many (200 texts) | 0.184 | 34.3, 35.0, 35.4 | 34.0, 34.9, 35.4 |
+| many+words | 0.190 | 145.3, 152.9, 152.9 | 146.4, 199.2, 199.2 |
+
+The first check after an open: stroop 1.16 ms skipped, 7.80 ms built;
+many+words 42.2 ms skipped, 179.3 ms built. So a miss costs 0.02 to 0.03
+ms more than a build, within the spread of the larger projects, and a skip
+saves the whole build: 230 ms of the video case's first check, 137 ms of
+many+words'. `ypt_cache_trim()` of a folder of 10, 100 and 1,000 records
+of 64 KB: 0.009, 0.082 and 0.915 ms median; of oddball's 2 records 0.003.
+
+**ThreadSanitizer** (gcc 12, RelWithDebInfo, built and run under
+`setarch -R`): `test_designer_build` passes (153 checks); part 9 runs a
+Build of stroop on the build thread and its check pack on the test's
+thread at once, into one cold cache, four times. TSan reports three races,
+all in the layout library that each build's glyph runs create
+(`ylay_create()`), none in `build.c`:
+- `skb_font_collection_create()` (`skb_font_collection.c` 333, `++id` on
+  a static): the race the plan named. Two collections can get one id.
+- `skb_attribute_collection_create()` (`skb_attribute_collection.c` 44):
+  the same `++id` pattern, not in part T's table.
+- `ylay_get_versions()` (`pack/layout.c` 178): writes HarfBuzz's version
+  pointer into a static at each call. Part T's table calls it benign (the
+  same value each time); in C's terms it is a data race.
+
+Each round's check pack was byte-equal to a build alone, and the Build's
+pack ID was `ypak`'s. A fix (atomic ids in a Skribidi patch, the versions
+filled once) is a pack/layout patch release: reported, not made.
+
+**Tests**: `test_designer_build` (153 checks; ctest, with `ypak`'s path):
+1. Each of afc2, bimanual, oddball, rdk, stroop (with the test font) and
+   visuomotor: Build's pack ID equals that of the `ypak build` process of
+   the same description; the size is the file's; the stamp has the
+   description, then the definition, then each source, absolute; up to
+   date just after. oddball: its records are in `DSG_CACHE_DIR`; an old
+   1.5 GiB record (sparse; Linux) goes at the next Build and the Build's
+   own stay. A folder `.` has its real name.
+2. A table row with one field too many: one error from Build that
+   `dsg_csv_place()` maps to `conditions.pstb`, row 1, with its source and
+   without `ypak: `.
+3. An unknown column in the definition: an error at its line and column,
+   with the offset of that place in the saved file. A 120 s wait: a
+   warning (severity warning, no `warning: `) at its place; visuomotor's
+   two warnings do not fail its Build. A description that does not parse:
+   no place in the definition, and a stamp of the description alone.
+4. After `dsg_project_save()` of an edit, the pack's definition is the
+   saved file's bytes.
+5. Newest wins: with the build thread held in its wake, two posts give
+   one build, the last; a cancel drops a waiting Build (no result, not
+   busy); a post after a cancel builds.
+6. POSIX: a stand-in `ffmpeg` (a shell script first on the `PATH`) holds
+   the Build in its step; a cancel there gives `DSG_BUILD_CANCELED`, no
+   error, no pack, no temporary file, and a stale result.
+7. Stale: by revision; by a source's time at the same size; by its size;
+   with the pack gone; by the description's time.
+8. The check pack: the cache folder; skipped for the same inputs; built
+   for another text, another description (the same sources), a source's
+   time or bytes, a font's time (stroop), the pack gone, another pack of
+   the same size, a pack of another size at the same time, and a source
+   written now and again at the same size and time (the 2 s window); each
+   pack equal to a fresh `ypt_build_text()` of the same inputs, stroop's
+   glyph runs too. Through `dsg_check()`: after a forget, a pack and no
+   error, and the pack file not built again.
+9. Two builds at once (above).
+
+Hand mutants, 28 of 28 killed (each reverted):
+
+| Mutant | Fails |
+|---|---|
+| b-01: a waiting job not replaced | the newest ran |
+| b-02: a cancel keeps the waiting job | the cancel dropped it |
+| b-03: no `ypt_options.cancel` | canceled, no error |
+| b-04: the cancel misses the newest job | canceled, no error |
+| b-05: busy ignores the running job | the build is in its ffmpeg step |
+| b-06: stale ignores the revision | another revision: stale |
+| b-07: stale ignores a source's time | a source's time: stale |
+| b-08: stale ignores the pack | the pack gone: stale |
+| b-09: the stamp without the description | the stamp's sources |
+| b-10: the stamp without a curveset's font | the stamp's sources (stroop) |
+| b-11: a description's line as the definition's | no place in the definition |
+| b-12: no offset | its offset is its line and column's |
+| b-13: no warnings | a warning does not fail it |
+| b-14: warnings as errors | visuomotor built |
+| b-15: the `warning: ` prefix kept | the severity says it |
+| b-16: the `ypak: ` prefix kept | the message names the source |
+| b-17: no source for a resource's message | the message names the source |
+| b-18: Build without the cache | the Build's records are in the cache |
+| b-19: the check pack without the cache | the entry cache is there |
+| b-20: no trim after a Build | an old record past the bound went |
+| b-21: the check pack never skipped | the same inputs: skipped |
+| b-22: the designer's copies keyed by time | another text: built, fresh |
+| b-23: the key without the description | another description: built, fresh |
+| b-24: no 2 s window | the same size at the same time: built, fresh |
+| b-25: the key file without the pack's time | another pack in its place |
+| b-26: the key file without the pack's size | a pack of another size at its time |
+| b-27: a folder `.` named `.` | a folder '.' |
+| b-28: a trim's bound below the pack | the Build's records are in the cache |
+
+Also: `test_designer_build` 5 runs in a row, 0 failed; ctest from the
+Release tree with the Test Engine and the examples on, `DISPLAY` and
+`WAYLAND_DISPLAY` unset: 146 of 146 (`test_designer_ui_real` now runs on
+B's `build.c`). clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`,
+`-Wconversion`, `-Wshorten-64-to-32`) on `build.c` and `build_test.c`: no
+warning; emcc on `build.c`: no warning; the Windows functions of both
+(file stamp, absolute path, file identity, `_utime64()`) with clang 24
+`--target=x86_64-pc-windows-gnu` against hand-written stubs: no warning.
+Locals that a call fills are initialized (C4701).
+
+**For the other parts.**
+- V: `dsg_build_stale()` stats each source; call it at most once a second
+  (as `dsg_rig_changed()`), not every frame, for a project with many
+  sources.
+- The check pack's build has no cancel (`dsg_build_check_pack()` takes
+  none): a Quit during a cold check pack of the video case waits up to
+  3.6 s for the check thread. With the skip and a warm cache this is rare.
+
+**Not done.**
+- Windows and macOS not compiled or run; part 6 (the stand-in ffmpeg) and
+  the sparse record are POSIX and Linux only.
+- The three layout races above (a pack/layout patch release).
+- The UI was not opened. Build's issues in the Issues panel and a click
+  to a table cell were checked in the core only (`dsg_csv_place()`); part
+  V's `te_run.cpp` checks the click.
+
 ## First version
 
 In:
