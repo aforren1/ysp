@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -41,9 +42,12 @@
 #endif
 #include <windows.h>
 #include <direct.h>
+#include <sys/utime.h>
 #else
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <utime.h>
 #if !defined(__EMSCRIPTEN__)
 #include <fcntl.h>
 #include <spawn.h>
@@ -193,12 +197,12 @@ static int uexists(const char* path) {
     return 1;
 }
 
-/* A whole file into memory owned by c. */
-static uint8_t* read_file(C* c, const char* path, int64_t* n) {
+/* A whole file into memory owned by c; quiet: no message (a cache miss). */
+static uint8_t* read_file_q(C* c, const char* path, int64_t* n, int quiet) {
     FILE* f = ufopen(path, "rb");
     uint8_t* d;
     int64_t sz;
-    if (!f) { cfail(c, YPAK_ERR_IO, "cannot open '%s'", path); return NULL; }
+    if (!f) { if (!quiet) cfail(c, YPAK_ERR_IO, "cannot open '%s'", path); return NULL; }
 #if defined(_WIN32)
     _fseeki64(f, 0, SEEK_END);
     sz = _ftelli64(f);
@@ -208,14 +212,14 @@ static uint8_t* read_file(C* c, const char* path, int64_t* n) {
     sz = (int64_t)ftello(f);
     fseeko(f, 0, SEEK_SET);
 #endif
-    if (sz < 0 || (uint64_t)sz > (uint64_t)SIZE_MAX / 2) { fclose(f); cfail(c, YPAK_ERR_IO, "cannot size '%s'", path); return NULL; }
+    if (sz < 0 || (uint64_t)sz > (uint64_t)SIZE_MAX / 2) { fclose(f); if (!quiet) cfail(c, YPAK_ERR_IO, "cannot size '%s'", path); return NULL; }
     d = (uint8_t*)calloc_c(c, (size_t)sz + 16);
     if (!d) { fclose(f); cfail(c, YPAK_ERR_NOMEM, "out of memory reading '%s'", path); return NULL; }
     {
         int64_t at = 0;   /* in pieces, as sk_put() writes */
         while (at < sz) {
             size_t k = sz - at > ((int64_t)16 << 20) ? ((size_t)16 << 20) : (size_t)(sz - at);
-            if (fread(d + at, 1, k, f) != k) { fclose(f); cfail(c, YPAK_ERR_IO, "cannot read '%s'", path); return NULL; }
+            if (fread(d + at, 1, k, f) != k) { fclose(f); if (!quiet) cfail(c, YPAK_ERR_IO, "cannot read '%s'", path); return NULL; }
             at += (int64_t)k;
         }
     }
@@ -223,6 +227,7 @@ static uint8_t* read_file(C* c, const char* path, int64_t* n) {
     *n = sz;
     return d;
 }
+static uint8_t* read_file(C* c, const char* path, int64_t* n) { return read_file_q(c, path, n, 0); }
 
 static void hex(const uint8_t* b, int n, char* out) {
     static const char h[] = "0123456789abcdef";
@@ -419,6 +424,10 @@ typedef struct E {
     jv*      color_rec;    /* a color curve set's counts, for its derivation        */
     /* a video's index entry, made with it; on the index, its video */
     struct E* idx;
+    /* the last source load_source() read: its SHA-256, for the cache key */
+    uint8_t  src_sha[32];
+    int      has_src;
+    int      cached;       /* taken from the entry cache (the log says so)  */
 } E;
 
 typedef struct B {     /* a build */
@@ -441,6 +450,15 @@ typedef struct B {     /* a build */
     E*          runs;       /* the glyph runs that hold them, or NULL        */
     void*       htab;       /* the tables the loader's host has opened       */
     int         n_htab, c_htab;
+    int       (*cancel)(void* ctx);
+    void*       cancel_ctx;
+    const char* cache;      /* the entry cache's folder, or NULL             */
+    int         stored;     /* records this build wrote to it                */
+    /* `ffmpeg -version`, run once a build: < 0 when it does not run; its
+     * first line, and the SHA-256 of its whole text for the cache key */
+    int         ffv;        /* 0: not run yet; 1: ran; -1: does not run      */
+    char        ffv_line[256];
+    uint8_t     ffv_sha[32];
 } B;
 
 static E* add_entry(B* b) {
@@ -481,6 +499,8 @@ static uint8_t* load_source(B* b, E* e, const char* rel, int64_t* n) {
     d = read_file(b->c, path, n);
     if (!d) return NULL;
     ypak_sha256(d, (size_t)*n, sha);
+    memcpy(e->src_sha, sha, 32);
+    e->has_src = 1;
     hex(sha, 32, hx);
     s = jnew(b->c, J_OBJ);
     jset(b->c, s, "path", jstrz(b->c, rel));
@@ -528,6 +548,415 @@ static jv* deriv_new(B* b, const char* op, const char* by) {
     jset(b->c, d, "op", jstrz(b->c, op));
     jset(b->c, d, "by", jstrz(b->c, by));
     return d;
+}
+
+/* --- the entry cache (docs/pack.md 19) ------------------------------------------
+ * A record holds what a derivation made from one source: each part's bytes
+ * (or a mark that the bytes are the source's), its entry flags and its
+ * derivation's canonical JSON. Its file name is the key's hex: the SHA-256
+ * of everything the derivation reads (cache_key()). Records are written
+ * through a temporary file and a rename, so a reader sees a whole record
+ * or none; one that does not check out (ypt_cache_parse()) is a miss, and
+ * the entry is derived again, so the cache can cost time but never bytes.
+ *
+ * Record: 64-byte header ("YSPCACHE", version 1, the part count, the key,
+ * the file's size, the XXH64 of the rest), then 32 bytes a part (entry
+ * flags, the source mark, the JSON's length, the bytes' length, 0), then
+ * per part its JSON and its bytes, each zero-padded to 16. */
+
+#define YPT_CACHE_HEAD 64u
+#define YPT_CACHE_PART 32u
+#define YPT_CACHE_PARTS 4
+#define YPT_CACHE_DERIV ((uint64_t)1 << 20)
+#define YPT_CACHE_EXT ".yspce"
+
+static uint64_t r64(const uint8_t* p) { return (uint64_t)r32(p) | ((uint64_t)r32(p + 4) << 32); }
+
+/* The zero padding after a field that ends at *at: 0 when it is outside n or not zero. */
+static int cache_pad(const uint8_t* d, uint64_t n, uint64_t* at) {
+    uint64_t k = (16 - (*at & 15)) & 15, i;
+    if (k > n - *at) return 0;
+    for (i = 0; i < k; i++)
+        if (d[*at + i]) return 0;
+    *at += k;
+    return 1;
+}
+
+int ypt_cache_parse(const void* rec, size_t n, const uint8_t* key, ypt_cache_part* parts, int cap) {
+    const uint8_t* d = (const uint8_t*)rec;
+    uint64_t at, nn = (uint64_t)n;
+    uint32_t np, i;
+    if (!d || !parts || nn < YPT_CACHE_HEAD || memcmp(d, "YSPCACHE", 8) != 0 || r32(d + 8) != 1) return YPAK_ERR_FORMAT;
+    np = r32(d + 12);
+    if (np < 1 || np > YPT_CACHE_PARTS || (int)np > cap) return YPAK_ERR_FORMAT;
+    if (key && memcmp(d + 16, key, 32) != 0) return YPAK_ERR_FORMAT;
+    if (r64(d + 48) != nn) return YPAK_ERR_FORMAT;
+    if (ypak_xxh64(d + YPT_CACHE_HEAD, (size_t)(nn - YPT_CACHE_HEAD), 0) != r64(d + 56)) return YPAK_ERR_CORRUPT;
+    at = YPT_CACHE_HEAD + (uint64_t)np * YPT_CACHE_PART;
+    if (at > nn) return YPAK_ERR_FORMAT;
+    for (i = 0; i < np; i++) {
+        const uint8_t* t = d + YPT_CACHE_HEAD + (uint64_t)i * YPT_CACHE_PART;
+        uint32_t src = r32(t + 4);
+        uint64_t dl = r64(t + 8), sz = r64(t + 16);
+        if (src > 1 || r64(t + 24) != 0 || (src && sz)) return YPAK_ERR_FORMAT;
+        if (dl > YPT_CACHE_DERIV || dl > nn - at) return YPAK_ERR_FORMAT;
+        parts[i].flags = r32(t);
+        parts[i].source = src;
+        parts[i].deriv = (const char*)(d + at);
+        parts[i].deriv_len = (size_t)dl;
+        at += dl;
+        if (!cache_pad(d, nn, &at) || sz > nn - at) return YPAK_ERR_FORMAT;
+        parts[i].data = src ? NULL : d + at;
+        parts[i].size = sz;
+        at += sz;
+        if (!cache_pad(d, nn, &at)) return YPAK_ERR_FORMAT;
+    }
+    return at == nn ? (int)np : YPAK_ERR_FORMAT;
+}
+
+/* Every folder of path, made when missing. 0 when path is a folder after. */
+static int umkdirs(const char* path) {
+    char t[2048];
+    size_t i, n = strlen(path);
+    if (!n || n >= sizeof t) return -1;
+    memcpy(t, path, n + 1);
+    for (i = 1; i < n; i++) {
+        if (t[i] != '/' && t[i] != '\\') continue;
+        if (t[i - 1] == ':' || t[i - 1] == '/' || t[i - 1] == '\\') continue;   /* "C:\", "//server" */
+        t[i] = 0;
+        umkdir(t);
+        t[i] = path[i];
+    }
+    if (umkdir(t) != 0) return -1;
+#if defined(_WIN32)
+    {
+        wchar_t wp[2048];
+        DWORD a;
+        if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wp, 2048)) return -1;
+        a = GetFileAttributesW(wp);
+        return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) ? 0 : -1;
+    }
+#else
+    {
+        struct stat st;
+        return stat(path, &st) == 0 && S_ISDIR(st.st_mode) ? 0 : -1;
+    }
+#endif
+}
+
+/* Marks a record as used now, for ypt_cache_trim()'s order. */
+static void utouch(const char* path) {
+#if defined(_WIN32)
+    wchar_t wp[2048];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wp, 2048)) (void)_wutime(wp, NULL);
+#else
+    (void)utime(path, NULL);
+#endif
+}
+
+static void lib_versions(C* c, jv* tool, int laid_out);
+
+static int cancelled(B* b) { return b->cancel && b->cancel(b->cancel_ctx); }
+static int cancel_fail(B* b) { return cfail(b->c, YPT_ERR_CANCELED, "the build was canceled"); }
+
+/* The key: the SHA-256 of every input the derivation reads. The tool's
+ * version and the libraries' (as the manifest names them), the kind, the
+ * resource as written (canonical JSON), the project's audio, the source's
+ * SHA-256, and what the caller adds (for an ffmpeg step, the program's
+ * whole -version text and the command). 0: no key (no cache, no source). */
+static int cache_key(B* b, const E* e, const char* extra, uint8_t key[32]) {
+    sb t;
+    jv* tool;
+    char line[160], hx[65];
+    if (!b->cache || !e->has_src) return 0;
+    memset(&t, 0, sizeof t);
+    sb_put(&t, "ysp pack entry cache 1\ntool ", 28);
+    tool = jnew(b->c, J_OBJ);
+    if (!tool) return 0;
+    lib_versions(b->c, tool, 0);
+    jw(b->c, &t, tool);
+    snprintf(line, sizeof line, "\nkind %s\nresource ", ypak_kind_name(e->kind));
+    sb_put(&t, line, strlen(line));
+    jw(b->c, &t, e->res);
+    hex(e->src_sha, 32, hx);
+    hx[64] = 0;
+    snprintf(line, sizeof line, "\naudio %d %d\nsource %s\n", b->rate, b->channels, hx);
+    sb_put(&t, line, strlen(line));
+    if (extra) sb_put(&t, extra, strlen(extra));
+    if (t.bad || !t.p) { free(t.p); return 0; }
+    ypak_sha256(t.p, t.n, key);
+    free(t.p);
+    return 1;
+}
+
+static void cache_path(const B* b, const uint8_t key[32], const char* tail, char* out, size_t cap) {
+    char hx[65];
+    hex(key, 32, hx);
+    hx[64] = 0;
+    snprintf(out, cap, "%s/%s%s", b->cache, hx, tail);
+}
+
+/* The record of key with want parts: 1 and parts (into memory that c
+ * owns), or 0, a miss. */
+static int cache_get(B* b, const uint8_t key[32], ypt_cache_part* parts, int want) {
+    char path[2300];
+    int64_t n = 0;
+    uint8_t* d;
+    cache_path(b, key, YPT_CACHE_EXT, path, sizeof path);
+    d = read_file_q(b->c, path, &n, 1);
+    if (!d || ypt_cache_parse(d, (size_t)n, key, parts, want) != want) return 0;
+    utouch(path);
+    return 1;
+}
+
+/* A part's derivation back as JSON (the manifest writes it canonically
+ * again): NULL unless it is an object. */
+static jv* cache_deriv(B* b, const ypt_cache_part* p) {
+    yjs_value* v = NULL;
+    yjs_error je;
+    if (yjs_parse(jar(b->c), p->deriv, p->deriv_len, NULL, &v, &je) != YJS_OK || !v || v->type != J_OBJ) return NULL;
+    return v;
+}
+
+/* Takes n entries (ents[i] gets part i) from the record of key; the parts
+ * marked in src keep the bytes the builder loaded. 1: a hit. */
+static int cache_take(B* b, const uint8_t key[32], E* const* ents, const int* src, int n) {
+    ypt_cache_part p[YPT_CACHE_PARTS];
+    jv* dv[YPT_CACHE_PARTS];
+    int i;
+    memset(p, 0, sizeof p);
+    if (n > YPT_CACHE_PARTS || !cache_get(b, key, p, n)) return 0;
+    for (i = 0; i < n; i++) {
+        if ((int)p[i].source != src[i] || (p[i].flags & ~(uint32_t)YPAK_F_STREAM) || p[i].size > (uint64_t)INT64_MAX) return 0;
+        if (src[i] && !ents[i]->data) return 0;
+        dv[i] = cache_deriv(b, &p[i]);
+        if (!dv[i]) return 0;
+    }
+    for (i = 0; i < n; i++) {
+        E* e = ents[i];
+        if (!src[i]) {
+            e->data = p[i].data;
+            e->size = (int64_t)p[i].size;
+        }
+        e->flags = p[i].flags;
+        e->deriv = dv[i];
+        e->cached = 1;
+    }
+    return 1;
+}
+
+/* Writes the record of key from n built entries (ents[i]'s bytes, or the
+ * source mark where src[i]). A failure leaves no record and is not the
+ * build's: the next build derives the entry again. */
+static void cache_put(B* b, const uint8_t key[32], E* const* ents, const int* src, int n) {
+    uint8_t head[YPT_CACHE_HEAD + YPT_CACHE_PARTS * YPT_CACHE_PART];
+    static const uint8_t zeros[16] = { 0 };
+    sb dt[YPT_CACHE_PARTS];
+    ypak_xxh64_state xs;
+    uint64_t size = YPT_CACHE_HEAD + (uint64_t)n * YPT_CACHE_PART;
+    char tmp[2400], path[2300], tail[64];
+    FILE* f;
+    int i, pass, bad = 0;
+    if (n > YPT_CACHE_PARTS) return;
+    memset(dt, 0, sizeof dt);
+    memset(head, 0, sizeof head);
+    memset(&xs, 0, sizeof xs);
+    tmp[0] = 0;
+    for (i = 0; i < n; i++) {
+        uint8_t* t = head + YPT_CACHE_HEAD + i * YPT_CACHE_PART;
+        uint64_t dsz = src[i] ? 0 : (uint64_t)ents[i]->size;
+        jw(b->c, &dt[i], ents[i]->deriv);
+        if (dt[i].bad || !ents[i]->deriv) bad = 1;
+        w32(t, ents[i]->flags);
+        w32(t + 4, src[i] ? 1u : 0u);
+        w64(t + 8, (uint64_t)dt[i].n);
+        w64(t + 16, dsz);
+        size += (((uint64_t)dt[i].n + 15) & ~(uint64_t)15) + ((dsz + 15) & ~(uint64_t)15);
+    }
+    if (bad) goto out;
+    memcpy(head, "YSPCACHE", 8);
+    w32(head + 8, 1);
+    w32(head + 12, (uint32_t)n);
+    memcpy(head + 16, key, 32);
+    w64(head + 48, size);
+    /* the same bytes twice: hashed, then written */
+    f = NULL;
+    for (pass = 0; pass < 2 && !bad; pass++) {
+        if (pass == 0) {
+            ypak_xxh64_init(&xs, 0);
+            ypak_xxh64_update(&xs, head + YPT_CACHE_HEAD, (size_t)n * YPT_CACHE_PART);
+        } else {
+            /* a name no other writer has now: this process and thread */
+#if defined(_WIN32)
+            snprintf(tail, sizeof tail, ".%lx-%lx.tmp", (unsigned long)GetCurrentProcessId(), (unsigned long)GetCurrentThreadId());
+#else
+            snprintf(tail, sizeof tail, ".%lx-%llx.tmp", (unsigned long)getpid(), (unsigned long long)(uintptr_t)&f);
+#endif
+            cache_path(b, key, tail, tmp, sizeof tmp);
+            f = ufopen(tmp, "wb");
+            if (!f) { bad = 1; break; }
+            w64(head + 56, ypak_xxh64_digest(&xs));
+            if (fwrite(head, 1, YPT_CACHE_HEAD + (size_t)n * YPT_CACHE_PART, f) != YPT_CACHE_HEAD + (size_t)n * YPT_CACHE_PART) bad = 1;
+        }
+        for (i = 0; i < n && !bad; i++) {
+            const uint8_t* q[2];
+            uint64_t len[2];
+            int k;
+            q[0] = (const uint8_t*)dt[i].p;
+            len[0] = (uint64_t)dt[i].n;
+            q[1] = ents[i]->data;
+            len[1] = src[i] ? 0 : (uint64_t)ents[i]->size;
+            for (k = 0; k < 2 && !bad; k++) {
+                uint64_t left = len[k];
+                const uint8_t* at = q[k];
+                size_t pad = (size_t)((16 - (len[k] & 15)) & 15);
+                while (left) {   /* in pieces, as sk_put() writes */
+                    size_t m = left > ((uint64_t)16 << 20) ? ((size_t)16 << 20) : (size_t)left;
+                    if (pass == 0) ypak_xxh64_update(&xs, at, m);
+                    else if (fwrite(at, 1, m, f) != m) { bad = 1; break; }
+                    at += m;
+                    left -= m;
+                }
+                if (pad && pass == 0) ypak_xxh64_update(&xs, zeros, pad);
+                else if (pad && fwrite(zeros, 1, pad, f) != pad) bad = 1;
+            }
+        }
+    }
+    if (f) {
+        if (fclose(f) != 0) bad = 1;
+        cache_path(b, key, YPT_CACHE_EXT, path, sizeof path);
+        /* another build may have written the same record: either is whole */
+        if (bad || urename(tmp, path) != 0) uremove(tmp);
+        else b->stored++;
+    }
+out:
+    for (i = 0; i < n; i++) free(dt[i].p);
+}
+
+/* One entry, its bytes made from its source (a texture, an audio entry). */
+static int cache_take1(B* b, E* e, const uint8_t key[32]) {
+    static const int no_src[1] = { 0 };
+    return cache_take(b, key, &e, no_src, 1);
+}
+static void cache_put1(B* b, E* e, const uint8_t key[32]) {
+    static const int no_src[1] = { 0 };
+    cache_put(b, key, &e, no_src, 1);
+}
+
+typedef struct ypt_cfile { char name[96]; int64_t size; int64_t mtime; } ypt_cfile;
+
+static int cfile_cmp(const void* a, const void* b) {
+    const ypt_cfile* x = (const ypt_cfile*)a;
+    const ypt_cfile* y = (const ypt_cfile*)b;
+    if (x->mtime != y->mtime) return x->mtime < y->mtime ? -1 : 1;
+    return strcmp(x->name, y->name);
+}
+
+/* A record's name (64 hex digits and the extension) or a temporary
+ * file's (64 hex digits, '.', anything, ".tmp"): 1 record, 2 temporary,
+ * 0 another file, which the trim leaves alone. */
+static int cache_name_kind(const char* s) {
+    size_t i, n = strlen(s);
+    if (n < 64 + 4) return 0;
+    for (i = 0; i < 64; i++)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0;
+    if (!strcmp(s + 64, YPT_CACHE_EXT)) return 1;
+    if (s[64] == '.' && n >= 64 + 5 && !strcmp(s + n - 4, ".tmp")) return 2;
+    return 0;
+}
+
+int ypt_cache_trim(const char* dir, int64_t max_bytes, int64_t* kept, char* err, size_t cap) {
+    ypt_cfile* fl = NULL;
+    size_t nf = 0, cf = 0, i;
+    int64_t total = 0, now = (int64_t)time(NULL);
+    char path[2300];
+    if (err && cap) err[0] = 0;
+    if (kept) *kept = 0;
+    if (!dir) {
+        if (err && cap) snprintf(err, cap, "ypak: no cache folder given");
+        return YPAK_ERR_ARG;
+    }
+#if defined(_WIN32)
+    {
+        wchar_t wp[2100];
+        WIN32_FIND_DATAW fd;
+        HANDLE h = INVALID_HANDLE_VALUE;
+        snprintf(path, sizeof path, "%s\\*", dir);
+        if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wp, 2100) || (h = FindFirstFileW(wp, &fd)) == INVALID_HANDLE_VALUE) {
+            if (err && cap) snprintf(err, cap, "ypak: cannot list the cache folder '%s'", dir);
+            return YPAK_ERR_IO;
+        }
+        do {
+            char name[96];
+            int k;
+            uint64_t t = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            if (!WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, name, (int)sizeof name, NULL, NULL)) continue;
+            k = cache_name_kind(name);
+            if (!k) continue;
+            if (nf == cf) {
+                size_t nc = cf ? 2 * cf : 64;
+                ypt_cfile* g = (ypt_cfile*)realloc(fl, nc * sizeof *fl);
+                if (!g) break;
+                fl = g;
+                cf = nc;
+            }
+            snprintf(fl[nf].name, sizeof fl[nf].name, "%.95s", name);
+            fl[nf].size = (int64_t)(((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow);
+            fl[nf].mtime = (int64_t)((t - 116444736000000000ull) / 10000000ull);   /* 1601 to 1970, in 100 ns */
+            if (k == 2) {
+                if (now - fl[nf].mtime > 3600) {
+                    snprintf(path, sizeof path, "%s/%s", dir, name);
+                    uremove(path);
+                }
+                continue;
+            }
+            nf++;
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+#else
+    {
+        DIR* dd = opendir(dir);
+        struct dirent* de;
+        if (!dd) {
+            if (err && cap) snprintf(err, cap, "ypak: cannot list the cache folder '%s'", dir);
+            return YPAK_ERR_IO;
+        }
+        while ((de = readdir(dd)) != NULL) {
+            struct stat st;
+            int k = cache_name_kind(de->d_name);
+            if (!k || strlen(de->d_name) >= sizeof fl[0].name) continue;
+            snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+            if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            if (k == 2) {
+                if (now - (int64_t)st.st_mtime > 3600) remove(path);
+                continue;
+            }
+            if (nf == cf) {
+                size_t nc = cf ? 2 * cf : 64;
+                ypt_cfile* g = (ypt_cfile*)realloc(fl, nc * sizeof *fl);
+                if (!g) break;
+                fl = g;
+                cf = nc;
+            }
+            snprintf(fl[nf].name, sizeof fl[nf].name, "%.95s", de->d_name);
+            fl[nf].size = (int64_t)st.st_size;
+            fl[nf].mtime = (int64_t)st.st_mtime;
+            nf++;
+        }
+        closedir(dd);
+    }
+#endif
+    for (i = 0; i < nf; i++) total += fl[i].size;
+    if (nf) qsort(fl, nf, sizeof *fl, cfile_cmp);
+    for (i = 0; i < nf && total > max_bytes; i++) {
+        snprintf(path, sizeof path, "%s/%s", dir, fl[i].name);
+        if (uremove(path) == 0) total -= fl[i].size;
+    }
+    free(fl);
+    if (kept) *kept = total;
+    return 0;
 }
 
 /* --- kinds ------------------------------------------------------------------- */
@@ -1412,7 +1841,8 @@ static int build_audio(B* b, E* e) {
     int64_t n, k, clipped = 0;
     uint32_t from_rate = 0;
     const uint8_t* d;
-    int rc;
+    int rc, keyed;
+    uint8_t key[32];
     if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "stream", J_TRUE, e->name) ||
         want_type(b->c, e->res, "resample", J_STR, e->name))
         return YPAK_ERR_FORMAT;
@@ -1423,6 +1853,10 @@ static int build_audio(B* b, E* e) {
     if (!d) return YPAK_ERR_IO;
     e->data = d;
     e->size = n;
+    /* only a converted or resampled entry is stored, so a copy's lookup
+     * is a miss (a file that does not open) */
+    keyed = cache_key(b, e, NULL, key);
+    if (keyed && cache_take1(b, e, key)) return 0;
     memset(&wd, 0, sizeof wd);
     wd.data = d;
     wd.size = (size_t)n;
@@ -1467,6 +1901,7 @@ static int build_audio(B* b, E* e) {
     if (conv) jset(b->c, e->deriv, "convert", jstrz(b->c, conv));
     if (rs) jset(b->c, e->deriv, "resample", jstrz(b->c, rs));
     jset(b->c, e->deriv, "stream", jbool(b->c, (e->flags & YPAK_F_STREAM) != 0));
+    if (keyed && (from_rate || conv)) cache_put1(b, e, key);
     return 0;
 }
 
@@ -1565,12 +2000,15 @@ static int build_texture(B* b, E* e) {
     uint8_t* raw;
     uint64_t raw_n;
     char ver[160];
-    int jpeg, icc = 0;
+    int jpeg, icc = 0, keyed;
     ypt_jpeg jp;
+    uint8_t key[32];
     if (keys_ok(b->c, e->res, keys, e->name)) return YPAK_ERR_FORMAT;
     if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a PNG or JPEG file)", e->name);
     file = load_source(b, e, src, &n);
     if (!file) return YPAK_ERR_IO;
+    keyed = cache_key(b, e, NULL, key);
+    if (keyed && cache_take1(b, e, key)) return 0;
     jpeg = n >= 3 && file[0] == 0xFF && file[1] == 0xD8 && file[2] == 0xFF;
     memset(&jp, 0, sizeof jp);
     lodepng_state_init(&st);
@@ -1746,6 +2184,7 @@ static int build_texture(B* b, E* e) {
     jset(b->c, e->deriv, "format", jstrz(b->c, fmts));
     if (prims) jset(b->c, e->deriv, "primaries", jstrz(b->c, prims));
     if (icc) jset(b->c, e->deriv, "icc", jstrz(b->c, "srgb"));
+    if (keyed) cache_put1(b, e, key);
     return 0;
 }
 
@@ -1881,13 +2320,16 @@ static int run_program(const char* const* argv, char* out, size_t cap) {
 
 /* "ffmpeg version N-..." from ffmpeg -version's first line; 0, or -1 when
  * the program does not run. */
-static int ffmpeg_version(const char* prog, char* out, size_t cap) {
+static int ffmpeg_version(const char* prog, char* out, size_t cap, uint8_t* sha) {
     const char* argv[3];
     char text[8192];
     char* nl;
     char* cp;
     argv[0] = prog; argv[1] = "-version"; argv[2] = NULL;
     if (run_program(argv, text, sizeof text) != 0) return -1;
+    /* the whole text keys the entry cache: two builds of one version can
+     * differ in their configuration and libraries, which the text lists */
+    if (sha) ypak_sha256(text, strlen(text), sha);
     /* the first line, without the copyright */
     nl = strchr(text, '\n');
     if (nl) *nl = 0;
@@ -1902,6 +2344,15 @@ static int ffmpeg_version(const char* prog, char* out, size_t cap) {
         if (n >= cap) return -1;
         memcpy(out, text, n + 1);
     }
+    return 0;
+}
+
+/* ffmpeg_version() once a build (B.ffv). */
+static int ffmpeg_id(B* b, const char* prog, char* line, size_t cap) {
+    if (!b->ffv) b->ffv = ffmpeg_version(prog, b->ffv_line, sizeof b->ffv_line, b->ffv_sha) == 0 ? 1 : -1;
+    if (b->ffv < 0) return -1;
+    if (strlen(b->ffv_line) >= cap) return -1;
+    memcpy(line, b->ffv_line, strlen(b->ffv_line) + 1);
     return 0;
 }
 
@@ -2099,9 +2550,16 @@ static int build_video(B* b, E* e) {
     yvid_info info;
     char media[2300], idxp[2300], srcpath[2100], by[300], msg[512];
     sb note;
-    int is_mp4, rc = 0, made_media = 0, k, vi = 0, threads = 0, enc = ENC_OTHER;
+    int is_mp4, rc = 0, made_media = 0, k, vi = 0, threads = 0, enc = ENC_OTHER, keyed = 0;
     int64_t frames, n;
     const char* prog = b->ffmpeg ? b->ffmpeg : "ffmpeg";
+    uint8_t key[32];
+    E* pair[2];
+    int pair_src[2];
+    pair[0] = e;
+    pair[1] = ix;
+    pair_src[0] = ff ? 0 : 1;   /* a copy's bytes are its source's: the record holds its index */
+    pair_src[1] = 0;
     if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "ffmpeg", J_ARR, e->name) ||
         want_type(b->c, e->res, "ffmpeg_input", J_ARR, e->name) || want_type(b->c, e->res, "color", J_OBJ, e->name) ||
         want_type(b->c, e->res, "threads", J_INT, e->name))
@@ -2128,7 +2586,7 @@ static int build_video(B* b, E* e) {
         const jv* rec = prior_deriv(b, e->name);
         const char* rec_by = rec ? str_of(rec, "by", NULL) : NULL;
         char have[256];
-        int hv = ffmpeg_version(prog, have, sizeof have);
+        int hv = ffmpeg_id(b, prog, have, sizeof have);
         char tn[16], pools[64];
         const char** argv;
         int na = jn(ff), ni = fin ? jn(fin) : 0, i, at_src;
@@ -2214,8 +2672,25 @@ static int build_video(B* b, E* e) {
                 return cfail(b->c, YPAK_ERR_IO, "'%s': cannot run '%s -version'; install ffmpeg, put it on the PATH, or give its path "
                              "(ypak --ffmpeg PATH)", e->name, prog);
             }
+            {
+                char hx[65];
+                size_t xn = note.n + 128;
+                char* extra = (char*)calloc_c(b->c, xn);
+                hex(b->ffv_sha, 32, hx);
+                hx[64] = 0;
+                if (extra) {
+                    snprintf(extra, xn, "ffmpeg %s\ncommand %s\n", hx, note.p ? note.p : "");
+                    keyed = cache_key(b, e, extra, key);
+                }
+            }
+            if (keyed && cache_take(b, key, pair, pair_src, 2)) {
+                free(note.p);
+                goto from_cache;
+            }
             code = run_program(argv, tail, sizeof tail);
             made_media = 1;
+            /* the encode ran to its end; its output is not used */
+            if (cancelled(b)) { uremove(media); free(note.p); return cancel_fail(b); }
             if (code != 0) {
                 uremove(media);
                 free(note.p);
@@ -2228,6 +2703,9 @@ static int build_video(B* b, E* e) {
     } else {
         e->data = load_source(b, e, src, &e->size);
         if (!e->data) return YPAK_ERR_IO;
+        /* the index decodes every frame: the cost the record saves */
+        keyed = cache_key(b, e, NULL, key);
+        if (keyed && cache_take(b, key, pair, pair_src, 2)) goto from_cache;
         snprintf(media, sizeof media, "%s", srcpath);
         snprintf(by, sizeof by, "ypak %s", YPT_VERSION_STRING);
     }
@@ -2297,6 +2775,11 @@ static int build_video(B* b, E* e) {
         jset(b->c, c2, "siting", jstrz(b->c, vid_name(vid_siting, info.siting)));
         jset(b->c, ix->deriv, "color", c2);
     }
+    if (keyed) cache_put(b, key, pair, pair_src, 2);
+    return 0;
+from_cache:
+    ix->from = jnew(b->c, J_ARR);
+    jpush(b->c, ix->from, jstr(b->c, e->name, e->nl));
     return 0;
 }
 
@@ -3113,9 +3596,14 @@ static jv* entry_obj(C* c, const E* e) {
 /* What a build needs besides the description: a prefix for its own files
  * (the ffmpeg output, the index), the ffmpeg program, and in a rebuild the
  * pack and its manifest. */
-typedef struct bopt { const char* tmp; const char* ffmpeg; ypak_pack* prior; jv* prior_man; FILE* report; } bopt;
+typedef struct bopt {
+    const char* tmp; const char* ffmpeg; ypak_pack* prior; jv* prior_man; FILE* report;
+    int (*cancel)(void* ctx); void* cancel_ctx;
+    const char* cache;   /* the entry cache, or NULL         */
+    int stored;          /* out: records the build wrote     */
+} bopt;
 
-static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink* out) {
+static int build_desc(C* c, jv* desc, const char* base_dir, bopt* bo, sink* out) {
     static const char* const tkeys[] = { "format", "version", "experiment", "audio", "private", "resources", NULL };
     static const char* const ekeys[] = { "entry", "source", "media_type", NULL };
     static const char* const akeys[] = { "rate", "channels", "map", NULL };
@@ -3138,6 +3626,12 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     b.prior = bo->prior;
     b.prior_man = bo->prior_man;
     b.report = bo->report;
+    b.cancel = bo->cancel;
+    b.cancel_ctx = bo->cancel_ctx;
+    if (bo->cache) {
+        if (umkdirs(bo->cache) == 0) b.cache = bo->cache;
+        else if (c->warn) fprintf(c->warn, "warning: the entry cache '%s' is not a folder that can be made; the build takes no cache\n", bo->cache);
+    }
     snprintf(b.src_dir, sizeof b.src_dir, "%s", base_dir ? base_dir : "");
     if (keys_ok(c, desc, tkeys, "the source description")) return YPAK_ERR_FORMAT;
     if (strcmp(str_of(desc, "format", ""), "ysp-pack-source") != 0 || !jget(desc, "version") || jget(desc, "version")->type != J_INT ||
@@ -3257,7 +3751,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
      * (the loader's host reads them), then glyph runs (which the
      * experiment's texts may add), then curve sets */
     for (pass = 0; pass < 4 && rc == 0; pass++) {
-        if (pass == 2) rc = derive_runs(&b);
+        if (pass == 2) rc = cancelled(&b) ? cancel_fail(&b) : derive_runs(&b);
         for (i = 0; i < b.n && rc == 0; i++) {
             E* e = b.e[i];
             uint32_t k = e->kind;
@@ -3266,6 +3760,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
             if (pass == 1 && k != YPAK_KIND_EXPERIMENT) continue;
             if (pass == 2 && k != YPAK_KIND_GLYPHRUNS) continue;
             if (pass == 3 && k != YPAK_KIND_CURVESET) continue;
+            if (cancelled(&b)) { rc = cancel_fail(&b); break; }
             e->sources = jnew(c, J_ARR);
             switch (k) {
             case YPAK_KIND_EXPERIMENT: rc = build_experiment(&b, e); break;
@@ -3290,7 +3785,8 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
             default: rc = cfail(c, YPAK_ERR_FORMAT, "'%s': kind not built", e->name); break;
             }
             if (rc == 0) rc = hash_entry(c, e);
-            if (rc == 0 && c->log) fprintf(c->log, "  %-11s %12lld  %s\n", ypak_kind_name(e->kind), (long long)e->size, e->name);
+            if (rc == 0 && c->log)
+                fprintf(c->log, "  %-11s %12lld  %s%s\n", ypak_kind_name(e->kind), (long long)e->size, e->name, e->cached ? "  (cache)" : "");
         }
     }
     if (rc) goto done;
@@ -3346,6 +3842,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     man->chunk = YPAK_NO_CHUNK;
     if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0, fmt);
 done:
+    bo->stored = b.stored;
     if (b.ol_ok) yol_close(&b.ol);
     ypt_texts_free(&b.tx);
     return rc;
@@ -3396,9 +3893,13 @@ static int build_text_ex(const char* json, size_t n, const char* base_dir, const
     bo.prior = prior;
     bo.prior_man = prior_man;
     bo.report = report;
+    bo.cancel = o ? o->cancel : NULL;
+    bo.cancel_ctx = o ? o->cancel_ctx : NULL;
+    bo.cache = o ? o->cache : NULL;   /* ypt_rebuild_ex() passes none: it derives every entry */
     rc = build_desc(&c, desc, o && o->sources ? o->sources : base_dir, &bo, &s);
     rc = finish_file(&c, &s, tmp, out_path, rc);
     cfree_all(&c);
+    if (rc == 0 && bo.cache && bo.stored && o->cache_max > 0) ypt_cache_trim(o->cache, o->cache_max, NULL, NULL, 0);
     return rc;
 }
 
@@ -3815,6 +4316,8 @@ int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* o
     memset(&bo, 0, sizeof bo);
     bo.ffmpeg = o ? o->ffmpeg : NULL;
     bo.warn = o ? o->warn : NULL;
+    bo.cancel = o ? o->cancel : NULL;
+    bo.cancel_ctx = o ? o->cancel_ctx : NULL;
     rc = build_text_ex(text.p, text.n, sources_dir, tmp, &bo, &p, m, report, err, cap);
     free(text.p);
     if (rc) { ypak_close(&p); cfree_all(&c); return rc; }

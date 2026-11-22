@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.10.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.12.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -105,6 +105,24 @@
  *   pack with glyph runs gets a new manifest (four patch hashes, ylay
  *   0.3.0); entries without color glyphs are byte-identical.
  *
+ *   v0.12.0 (2026-11-22): a build can be canceled, and derived media come
+ *   from an entry cache (docs/pack.md 19; designer step 6, decisions 4 and
+ *   17). ypt_options.cancel is read before each resource (so before its
+ *   ffmpeg step) and after an ffmpeg step; a cancel gives YPT_ERR_CANCELED,
+ *   no pack and no temporary file (an ffmpeg encode that runs goes to its
+ *   end).
+ *   ypt_options.cache names a folder of cache records: a TEXTURE, an AUDIO
+ *   entry that is converted or resampled, and a VIDEO with its index are
+ *   taken from a record when the record's key matches (the tool's and its
+ *   libraries' versions, the resource, the project's audio, the source's
+ *   SHA-256 and, for an ffmpeg step, the whole `ffmpeg -version` text and
+ *   the command). A record is written through a temporary file and a
+ *   rename; one that does not read back whole is a miss. ypt_options.
+ *   cache_max and ypt_cache_trim() bound the folder. Without a cache, and
+ *   with a cold or a warm one, every pack has the same bytes; every entry
+ *   is byte-identical to v0.11.0's, and the manifest differs by the tool
+ *   version.
+ *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":
  *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
@@ -167,13 +185,31 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.11.0"
+#define YPT_VERSION_STRING "0.12.0"
+
+/* A build that ypt_options.cancel stopped (beside ysp/pack.h's YPAK_ERR_*). */
+#define YPT_ERR_CANCELED (-20)
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */
     FILE*       log;       /* one line per entry built; NULL: quiet               */
     const char* ffmpeg;    /* the ffmpeg program; NULL: "ffmpeg" on the PATH     */
     FILE*       warn;      /* one line per warning ("warning: ..."); NULL: quiet */
+    /* v0.12.0. Nonzero stops the build with YPT_ERR_CANCELED. Called on the
+     * building thread before each resource and after an ffmpeg step (an
+     * encode or a video index that runs goes to its end); a flag that
+     * another thread sets must be read atomically here. NULL: never. */
+    int       (*cancel)(void* ctx);
+    void*       cancel_ctx;
+    /* v0.12.0. The entry cache's folder (made, with its parents, when
+     * missing), or NULL for none. Builds in several threads or processes
+     * may share it. A record that does not read back whole is a miss, so
+     * the pack's bytes never depend on the cache. ypt_rebuild_ex() takes
+     * no cache: it derives every entry again. */
+    const char* cache;
+    /* v0.12.0. After a build that wrote a record, ypt_cache_trim() to this
+     * many bytes; 0: no bound. */
+    int64_t     cache_max;
 } ypt_options;
 
 /* Builds the pack that a source description (JSON, docs/pack.md 5.2)
@@ -206,7 +242,8 @@ int ypt_cat(const char* pack_path, const char* name, FILE* out, char* err, size_
  * gets "identical" or the first entry and offset that differ. */
 int ypt_rebuild(const char* pack_path, const char* sources_dir, const char* out_path, FILE* report,
                 char* err, size_t cap);
-/* The same with options (o->ffmpeg; o->sources and o->log are not used). An
+/* The same with options (o->ffmpeg and o->cancel; o->sources, o->log and
+ * o->cache are not used). An
  * ffmpeg step runs again only when this ffmpeg reports the version that the
  * manifest records; otherwise the entry's bytes come from the pack, checked
  * by its hashes, report says so, and everything made from it is rebuilt. */
@@ -215,6 +252,32 @@ int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* o
 /* Writes player, zero padding to a multiple of 4096, and the pack with
  * absolute offsets, to out_path. The pack ID does not change. */
 int ypt_append(const char* player_path, const char* pack_path, const char* out_path, char* err, size_t cap);
+
+/* --- the entry cache (docs/pack.md 19) --- */
+
+/* Removes the least recently used records of the cache folder dir (a hit
+ * makes a record the most recent) until their bytes total at most
+ * max_bytes, and temporary files older than an hour (a build that ended
+ * mid-write). A record another build holds open (Windows) stays. kept:
+ * the bytes of records left (NULL: not wanted). 0, or a negative code
+ * with err when the folder cannot be listed. */
+int ypt_cache_trim(const char* dir, int64_t max_bytes, int64_t* kept, char* err, size_t cap);
+
+/* A cache record's parts, as ypt_cache_parse() finds them in the bytes. */
+typedef struct ypt_cache_part {
+    uint32_t       flags;      /* the entry's flags (YPAK_F_*)                    */
+    uint32_t       source;     /* 1: the entry's bytes are its source's; data NULL */
+    const char*    deriv;      /* the derivation's JSON text, deriv_len bytes     */
+    size_t         deriv_len;
+    const uint8_t* data;       /* into the record's bytes                         */
+    uint64_t       size;
+} ypt_cache_part;
+/* Checks a record's bytes (public for the fuzz target and tests): the
+ * header, the key (NULL: not compared), the size, the XXH64 of everything
+ * after the header, each part's bounds and zero padding. The number of
+ * parts (1 to cap) into parts, or a negative code (YPAK_ERR_FORMAT,
+ * YPAK_ERR_CORRUPT). The JSON is not parsed here. */
+int ypt_cache_parse(const void* rec, size_t n, const uint8_t* key, ypt_cache_part* parts, int cap);
 
 /* The writer's name rule (docs/pack.md 2.7): 1 when name is a portable
  * entry name. Case-insensitive uniqueness is the build's check. */

@@ -19,8 +19,9 @@ through ysp/experiment.h. Tool v0.10.0 (2026-11-18, section 16) lays out
 glyph runs with the layout library's font fallback past the script and
 names the characters no font has. Tool v0.11.0 (2026-11-18, section 18)
 stores color glyphs: a COLR font's emoji as layers in glyph runs, their
-paints in the font's curve set, in pack format 2. Where the build
-changed the design, the text says so. When this page and rig_spec 5
+paints in the font's curve set, in pack format 2. Tool v0.12.0
+(2026-11-22, section 19) can cancel a build and takes derived media from
+an entry cache. Where the build changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
 Settled before this page, in rig_spec 5, and not reopened here: one zip
@@ -1024,7 +1025,7 @@ Sizes and build times: section 8.1.
 
 | Command | What it does |
 |---|---|
-| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description. Warnings (`warning: ...`, from tool v0.7.0) go to standard error and do not stop the build |
+| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH] [--cache DIR]` | Builds a pack from a source description. Warnings (`warning: ...`, from tool v0.7.0) go to standard error and do not stop the build. `--cache DIR` (tool v0.12.0, section 19): the entry cache's folder; `-v` marks each entry taken from it with `(cache)` |
 | `ypak verify PACK` | Every check: structure, canonical container, CRC-32, XXH64 tree, SHA-256 per entry against the manifest, the manifest against the 0x7379 records, the pack ID. Exit 0 only when all pass |
 | `ypak list PACK` | Name, kind, size, data offset, flags |
 | `ypak info PACK` | Pack ID, format, tool, experiment, project audio |
@@ -2715,3 +2716,213 @@ line lists four patch hashes and ylay 0.3.0; ysp/pack.h 0.5.0 and
 ysp/outline.h 0.5.0 in `tool.libraries`). Entries without color glyphs
 are byte-identical; the corpus pin (`tests/pack/corpus.sha256`) is
 unchanged.
+
+## 19. Tool v0.12.0: cancel and the entry cache (2026-11-22)
+
+Designer step 6, part K ([designer.md](designer.md), "Plan of step 6",
+decisions 4 and 17; "Part K as built"). Two additions for the designer's
+Build thread and its check pack:
+
+- A build can be canceled between entries (decision 4).
+- Derived media come from an entry cache when nothing they depend on
+  changed (decision 17). Without it the check pack encodes a project's
+  videos again at each text change: 3.6 s of no check results for a 10 s
+  1080p video.
+
+Without a cancel and without a cache, the tool does what v0.11.0 did:
+every entry of the test corpus is byte-identical (the corpus pin,
+`tests/pack/corpus.sha256`, is unchanged). The manifest differs by the
+tool's version, as at each release.
+
+### Decisions
+
+| Question | Decision | Why |
+|---|---|---|
+| The cancel's form | `ypt_options.cancel(cancel_ctx)`, a callback on the building thread; nonzero stops the build with `YPT_ERR_CANCELED` (-20) and the message "the build was canceled" | The caller keeps its flag in the form it has (a C11 atomic, a C++ `std::atomic`, an event). The header stays free of atomics: MSVC compiles C11 atomics only behind a switch |
+| Where it is read | Before each entry of each pass, before the glyph runs' derivation, and after an ffmpeg step | The plan also named "before an ffmpeg step". That read came right after the read before the step's resource (between them: the source's SHA-256 and `ffmpeg -version`), and no test could tell the two apart, so it was removed. An encode that runs, and a video index (it decodes every frame), go to their end |
+| What a cancel leaves | No pack, no `OUT.tmp`, no ffmpeg output and no index file | As for any failed build. Records that the build wrote before the cancel stay: each is whole |
+| What the cache holds | TEXTURE; AUDIO when converted or resampled; VIDEO with its VIDEO_INDEX (for a copied video, the index only) | These derivations cost more than reading their bytes back: PNG and JPEG decode at 10 to 30 MB/s of source, the resampler at 29 times real time, the ffmpeg step, and the index, which decodes every frame (section 8.2). The other kinds cost less than their source's SHA-256 (FILE, TABLE, CALIBRATION, SHADER, ARTWORK, FRAMESEQ's check) or depend on other entries (FONT, CURVESET, GLYPHRUNS, the experiment) |
+| The key | The SHA-256 of a text: the record format's line; the tool's version and every library version the manifest's `tool` lists; the kind; the resource as written (canonical JSON); the project's audio rate and channels; the source's SHA-256; and for an ffmpeg step, the SHA-256 of the whole `ffmpeg -version` text and the recorded command (the thread count and the tool's flags included) | Each is an input of the derivation. The whole `-version` text, not its first line: two ffmpeg builds of one version can differ in their configuration and libraries, which the text lists |
+| Hash the source, or check its size and time first | Hash it at every build | The manifest records each source's SHA-256, so the build reads and hashes every source anyway; the key adds no read. A size-and-time check would have to write a remembered SHA-256 into the manifest, and a source changed within one time step at the same size would then give a wrong pack. Measured below: on the video case the source's hash is 87 ms of a 236 ms hit (37 %) |
+| A record that is not right | A miss: the entry is derived again and the record written again | `ypt_cache_parse()` checks the header, the key, the size, the XXH64 of everything after the header, every bound and the zero padding; the build then needs the parts it expects, entry flags it allows, the source mark it expects and a derivation that is a JSON object. A record never fails a build |
+| Several builds, threads or processes | Each writes `KEY.PID-TID.tmp` (POSIX: the stack address in place of the thread ID) and renames it over `KEY.yspce` | A reader sees a whole record or none. On Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` fails while another build reads the record; the write is then dropped, and the record already there is the same |
+| Size | `ypt_options.cache_max` (after a build that wrote a record) and `ypt_cache_trim()`: least recently used records first, a hit counts as a use | See "Size growth" |
+| `ypak rebuild` | Takes no cache | It checks that the sources give the pack; a record would skip the derivation it checks |
+
+### Reference: the API
+
+```c
+#define YPT_ERR_CANCELED (-20)
+typedef struct ypt_options {
+    /* ... v0.11.0's fields ... */
+    int       (*cancel)(void* ctx);   /* nonzero: stop; NULL: never                */
+    void*       cancel_ctx;
+    const char* cache;                /* the folder, made with its parents; NULL: none */
+    int64_t     cache_max;            /* trim to this after a write; 0: no bound   */
+} ypt_options;
+int ypt_cache_trim(const char* dir, int64_t max_bytes, int64_t* kept, char* err, size_t cap);
+int ypt_cache_parse(const void* rec, size_t n, const uint8_t* key, ypt_cache_part* parts, int cap);
+```
+
+A cache folder that cannot be made gives one line on `ypt_options.warn`
+("warning: the entry cache '...' is not a folder that can be made; the
+build takes no cache"), and the build goes on without it. With
+`ypt_options.log`, an entry taken from the cache ends its line with
+`(cache)`. The designer keeps the folder at `.designer/cache/entries`,
+shared by the check pack and Build (part B).
+
+### Reference: the record
+
+A file `KEY.yspce` in the folder, KEY the key's 64 lowercase hex digits.
+Little-endian integers.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | `YSPCACHE` |
+| 8 | 4 | Version: 1 |
+| 12 | 4 | Parts: 1 to 4 (a texture or audio entry 1; a video 2: the video, then its index) |
+| 16 | 32 | The key |
+| 48 | 8 | The file's size |
+| 56 | 8 | XXH64 (seed 0) of bytes 64 to the end |
+| 64 | 32 a part | Entry flags (`YPAK_F_*`; only `YPAK_F_STREAM` is taken), the source mark (1: the entry's bytes are its source's, none stored; 0 or 1 only), the derivation's length (at most 1 MiB), the bytes' length (0 with the source mark), 8 zero bytes |
+| then | | Per part: the derivation (the manifest's canonical JSON), zero padding to 16, the bytes, zero padding to 16 |
+
+Nothing follows the last part. `tests/fuzz/cache_fuzz.c` fuzzes the
+reader (below).
+
+### Size growth
+
+The folder gets one record for each key it has not seen: each new
+version of a cached source, each new set of a resource's options, each
+new tool or ffmpeg. A record is about its entry's size: a texture's
+texels (4 bytes a pixel for rgba8), a resampled WAV, an encoded video and
+its index; for a copied video, only its index (a few KB). Records of old
+keys stay until a trim. A new tool version makes every key new, so the
+folder can hold one full set of each version used. `cache_max` bounds it:
+after a build that wrote a record, the build removes the least recently
+used records until the folder's records total at most `cache_max` bytes,
+and temporary files older than an hour (a build that ended mid-write).
+Other files in the folder stay. A bound smaller than one record keeps
+none. The designer's choice of the bound is part B's.
+
+### Measured
+
+Conditions: the Linux desktop (Intel Core i5-14500, Debian 12, kernel
+6.11.5-liquorix, governor `performance`), gcc 12.2, Release (Ninja),
+ffmpeg 5.1.6, 2026-11-22. One block under the measuring lock, pinned with
+`taskset` to CPUs 2 and 4 (two P-cores), `DISPLAY` and `WAYLAND_DISPLAY`
+unset; the 1-minute load average was 0.25 before the block and 0.65
+after it. Files on `/tmp`, ext4 on NVMe, in the page cache. A harness
+(`cbench`, not kept) calls `ypt_build()` in its own process, as the
+designer does: "none" is no cache, "cold" a cache folder removed before
+each build (not timed), "warm" a filled one. Milliseconds: median, p95
+and max.
+
+The video case: `tests/player/rdk` with one video, a 10 s 1080p clip at
+30 fps (ffmpeg's `testsrc2`, MJPEG at q 3, 31.2 MB) through the ffmpeg
+step to MPEG-1 (`-q:v 3 -g 15 -bf 0`, `"threads": 2`): a 27.1 MB pack,
+the plan's case.
+
+| Build | Runs | Time |
+|---|---|---|
+| No cache | 5 | 3,479, 3,495, 3,495 |
+| Cold cache (a miss, the 27.1 MB record written) | 5 | 3,496, 3,502, 3,502 |
+| Warm cache (a hit) | 20 | 236, 238, 245 |
+
+A hit costs 6.8 % of the build. Its parts, timed apart (20 runs each):
+
+| Part of a hit | Time |
+|---|---|
+| The source read and its SHA-256 (31.2 MB) | 91.0, 96.4, 97.4 |
+| The SHA-256 alone (0.36 GB/s, portable C) | 86.5, 86.7, 86.7 |
+| `ffmpeg -version` (the key's ffmpeg text) | 33.1, 34.2, 35.4 |
+| The record read and checked (27.1 MB, XXH64) | 5.5, 6.1, 6.3 |
+| The source's `stat()` (the size-and-time alternative) | under 0.003 |
+
+The rest, about 100 ms, is the entry's hashes for the manifest (its
+SHA-256 alone is about 75 ms at the rate above; not timed apart) and the
+pack's write. The source's hash is 37 % of a hit; a size-and-time check
+would save it at the cost described in Decisions, so the source is
+hashed. The key's own text and SHA-256 cost microseconds (not resolved
+beside the rest).
+
+The repository's projects (`tests/player/*`; stroop with Noto Sans
+Regular; 50 builds each, in process, a warm cache after one cold build):
+
+| Project | Records | No cache | Warm cache |
+|---|---|---|---|
+| rdk | 0 | 0.087, 0.139, 3.177 | 0.093, 0.163, 0.226 |
+| oddball (2 small textures) | 2 | 0.143, 0.198, 0.643 | 0.144, 0.204, 0.290 |
+| visuomotor | 0 | 0.286, 0.322, 0.640 | 0.294, 0.333, 0.479 |
+| bimanual | 0 | 0.371, 0.404, 0.770 | 0.378, 0.415, 0.517 |
+| stroop | 0 | 6.290, 6.501, 7.398 | 6.302, 6.452, 6.564 |
+
+Within the run-to-run spread: only oddball's two textures have a key,
+and their decode costs about what the record's read does. The plan's
+0.7 to 7.1 ms were `ypak` processes; in process the builds take 0.09 to
+6.3 ms.
+
+### Tests
+
+`test_pack_tool` (473 checks, 63 new; Linux gcc 12, Release and Debug
+with ASan and UBSan, and RelWithDebInfo with ThreadSanitizer, each
+under `setarch -R`, 0 failed):
+
+- Cancel: before the second resource (`YPT_ERR_CANCELED`, two reads, no
+  pack, no `.tmp`); before the first; never (the corpus's bytes; read 30
+  times: each of the 29 entries and the glyph runs' derivation); set
+  while ffmpeg runs (seen when its output file exists): the build stops
+  after the step, with no pack and no temporary file.
+- The corpus with no cache, a cold cache (in a folder made with two
+  parents) and a warm one: the same bytes; 13 records (9 textures, 3
+  converted and 1 resampled audio entries), no temporary file; 13
+  entries from the warm cache.
+- Each record damaged one way (a flipped bit, cut short, empty, another
+  record's bytes, flags the entry cannot have, a source mark, a
+  derivation that is not an object): 0 hits, the same bytes, and each
+  record written again.
+- The key: another option of a texture, other bytes of its source, and
+  another project rate each give the bytes without a cache.
+- The trim: room for all keeps all; a hit makes its record the most
+  recent; a trim to one record's bytes keeps that record; a temporary
+  file older than an hour goes, a new one and another file stay; a trim
+  to 0; a folder that is not there. `cache_max` of 1 byte and of 1 TiB.
+  A folder that cannot be made: a warning, the same bytes.
+- Two builds at once into one cold cache (threads; the description
+  without glyph runs, since Skribidi's font collection counter is a known
+  race, designer.md "The build thread"): the same bytes, 13 records, no
+  temporary file; then a warm build.
+- Video through ffmpeg: cold and warm (the video and its index from one
+  record), another argument, another version line, and the same version
+  line with another configuration (POSIX: shell wrappers around ffmpeg)
+  each a miss; a copied MPEG-1 file's record holds its index only.
+- `ypt_cache_parse()`: a good record, one of exactly 1 MiB of derivation, and 21 kinds of damage.
+
+`cache_fuzz` (self-driven: records of the right form, then up to four
+edits, half with their size, XXH64 and key mended): 4,000,000 parses
+under ASan and UBSan (834,693 whole records), and 600,000 parses with
+18,750 builds that found a mutated record where they look (451 hits);
+no report, no failed build, every miss the pack without a cache. Its
+short run (4,000 inputs, 250 builds) is the ctest `cache_fuzz_short`.
+
+Hand mutants (the runner cannot build the tool), 37 of 37 killed: each
+check of the record's reader (13), the build's checks of a record's
+parts (3), each part of the key (5: the source, the resource, the
+project's audio, the ffmpeg text, the whole text not its first line),
+each read of the cancel (3), the trim's order, its temporary files (2),
+its file names, the touch of a hit, the parent folders, `cache_max`,
+audio copies kept out, a copied video's bytes kept out, the index's
+`from` on a hit, the rename, the warning, and the texture's lookup.
+
+Not run here: Windows (MSVC, MinGW) and macOS; CI compiles them. The
+Windows code (wide paths, `MoveFileExW`, `FindFirstFileW`, `_wutime`)
+was written from the documentation of the calls.
+
+### Left
+
+- A hit still hashes the entry for the manifest (SHA-256, CRC-32); a
+  record could carry them (about 75 ms of the video case's 236 ms hit).
+- `ffmpeg -version` runs once a build (33 ms); a cache of it by the
+  program's path, size and time would be process state.
+- A video index that runs cannot be canceled (ysp/video.h has no
+  cancel); for a copied 1080p MPEG-1 file it takes seconds.

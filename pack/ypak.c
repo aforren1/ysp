@@ -19,7 +19,7 @@ static int usage(void) {
           "core build: no glyph runs (configure with -DYSP_BUILD_LAYOUT=ON for them)\n"
 #endif
           "usage:\n"
-          "  ypak build SOURCE.json -o OUT.ysppak [--sources DIR] [--ffmpeg PATH] [-v]\n"
+          "  ypak build SOURCE.json -o OUT.ysppak [--sources DIR] [--ffmpeg PATH] [--cache DIR] [-v]\n"
           "  ypak verify PACK\n"
           "  ypak list PACK\n"
           "  ypak info PACK\n"
@@ -58,6 +58,7 @@ int main(int argc, char** argv) {
         memset(&o, 0, sizeof o);
         o.sources = opt(argc, argv, "--sources");
         o.ffmpeg = opt(argc, argv, "--ffmpeg");
+        o.cache = opt(argc, argv, "--cache");
         o.log = flag(argc, argv, "-v") ? stdout : NULL;
         o.warn = stderr;
         rc = ypt_build(argv[2], out, &o, err, sizeof err);
