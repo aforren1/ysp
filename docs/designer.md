@@ -2464,6 +2464,270 @@ check named):
 - No ThreadSanitizer run: S adds an atomic counter that the watch thread
   writes and the UI thread reads, and no thread.
 
+#### Part R as built (2026-11-22)
+
+Branch `step6-r`, from `designer-step6` (`1110636`). Part R replaces S's
+stub `designer/core/run.c` and adds `tests/designer/run_test.c`
+(`test_designer_run`) and `tests/designer/fake_player.c`. S left no CMake
+lines for them; part R added them to `designer/CMakeLists.txt` (the
+targets `fake_player` and `test_designer_run`, its environment
+`YSP_DESIGNER_TEST=1`). No frozen interface changed. `run.c` defines only
+the Run section's functions as external symbols.
+
+**What it does.**
+- **`dsg_run_args()`**: the plan's order, `player PACK --out DIR [--rig
+  NAME] [--seed N] [--field NAME=VALUE]... [--allow-below-tier R,R]
+  [--windowed] [--sim --max-seconds S [--sim-gain ROLE=UNITS]...
+  [--participant SPEC]]`. With `sim`, no `--windowed` (the player refuses
+  it with `--sim`, exit 2); without `sim`, no `--max-seconds`, gain or
+  participant. `--max-seconds` is whole seconds rounded up (the player
+  reads it with `atoll()`). A gain is the shortest text that reads back as
+  the same double (`0.1`, not `0.10000000000000001`). Refused, with the
+  argv empty: a real run while `YSP_DESIGNER_TEST` is set; a rig that the
+  player would read as a path (a slash, a backslash, `.json` at the end)
+  or that starts with `-`; a seed that is not 0 to 2^64 - 1 (`strtoull()`
+  would give 2^64 - 1 for a larger one); a field with no name or an `=` in
+  it; a role (below tier, gain) that is empty, starts with `-` or holds
+  `,` or `=`; with `sim`, `max_seconds` not in (0, 172800] and a gain not
+  above 0; a string with no NUL in its array; a command line over
+  `DSG_RUN_ARGV` - 1 arguments or the 32 KB buffer.
+- **`dsg_run_out_dir()`**: `FOLDER/data/WHO_YYYYMMDD-HHMMSS`, UTC by
+  H. Hinnant's civil-date algorithm (no `gmtime()`). WHO is the field
+  `participant`, its bytes other than `A-Z a-z 0-9 - _ .` (and a `.` at
+  its start) made `_`, at most 64 bytes; `session` when there is none.
+- **`dsg_run_start()`**: refuses an output folder that exists, then runs
+  the version check (decision 5): `player --version` through
+  `dsg_proc_start()`, its answer in `TMP/player_version.log` (removed
+  after), a wait of at most 5 s that sleeps 0.2 ms between polls; a
+  version other than `PL_VERSION_STRING`, an exit other than 0 (a player
+  before 0.18.0 gives 2) or no answer refuses the run, and nothing
+  starts. Then it makes the missing folders above `DIR` and starts the
+  player with its output in `DIR.log` and `DIR/trials.csv` watched.
+- **`dsg_run_tick()`**: reads only after the watch thread's wake-up (an
+  atomic count that `run.c`'s own wake raises before it calls the UI's),
+  or 1 s after the last read. Then: `dsg_proc_poll()` first, so that once
+  the player has ended the reads see all it wrote; the log's and
+  `trials.csv`'s new bytes, from `FILE`s held open at their ends
+  (`clearerr()`, then `fread()` of 64 KB at a time); at the end the
+  `dsg_proc` is freed (a short join: the watch thread ends at the exit's
+  wake). The tick allocates nothing: the run's buffers are one `calloc()`
+  at the start (about 350 KB).
+- **`trials.csv`**: a byte-at-a-time state machine (RFC 4180 quoting,
+  ysp/trials.h's), so a row in two reads needs no buffer and no byte is
+  read twice. The header gives the columns `response`, `outcome` and
+  `rt_s` by name; a row counts at its line break outside quotes. The last
+  row's three fields are kept (128 bytes each); an empty `rt_s` is
+  `last_rt_s` -1.
+- **The log**: its last `DSG_RUN_LOG_LINES` (200) lines, each cut at
+  1,024 bytes, as one text; the oldest lines go with one `memmove()` a
+  read.
+- **States**: STARTING, RUNNING when `trials.csv` opens or the log has
+  `ysp_player: running;` (a real run's start line), STOPPING after a Stop
+  that went out, ENDED.
+- **Stop and Kill**: `dsg_run_stop()` gives `dsg_proc_stop()`'s value.
+  1: STOPPING, and `kill_offered` from `DSG_RUN_KILL_AFTER_NS` after the
+  first Stop. 0 while the player runs (a `--sim` run on Windows, part P):
+  the state stays RUNNING and `kill_offered` is true at once.
+  `dsg_run_kill()` does nothing before a Stop.
+- **The exit's text** (`dsg_run_info.exit_text`): 0 `Done: N trials in
+  DIR.`; 1 `Refused or failed: ` and the log's last line without
+  `ysp_player: `; 3 `Stopped: N trials written; trial K has no row.` (K
+  from the player's stop line) or `...; no trial was running.`; 2, 99 and
+  the others as `dsg_run_exit_text()`. A signal: `Ended by signal S
+  (NAME): the data set is not closed.`, and on Linux, for a run that had
+  a display (`dsg_run_desc.sim` false), the `xrandr` line of "What the Run
+  view shows". Windows: -9 is `Killed`, another negative status is shown
+  as its NTSTATUS in hex.
+- **`dsg_run_issue()`**: exit 1 only: the log's last line without
+  `ysp_player: `, an error of `DSG_FROM_PLAYER_RUN`, no place. `rig` is
+  true when the argv had `--rig` and the line has the word `rig` (not
+  `trigger`, not `rigid`): the player's refusals that a profile causes say
+  "the rig profile" or "the rig binds it".
+- **`fake_player`**: takes the player's command line and reads PACK as a
+  script (`header`, `row`, `rows`, `raw`, `out`, `err`, `outs`,
+  `outlong`, `sleep`, `wait FILE`, `term ignore`, `term exit CODE`,
+  `raise SIG`, `exit CODE`; the list is in the file). `--version` prints
+  `YSP_FAKE_PLAYER_VERSION` (`YSP_FAKE_PLAYER_OLD`: the usage and exit 2,
+  as a player before 0.18.0). It opens no window, so on Windows Stop
+  reaches it as little as it reaches `ysp_player --sim`. Part V's
+  `te_run.cpp` can start it with `UiPlatform.player_path` and the
+  environment variable set to `PL_VERSION_STRING`.
+
+**Decisions taken here.** The coordinator, or the user, can reverse each
+one.
+1. **An output folder that exists is refused in `dsg_run_start()`, not
+   in `dsg_run_out_dir()`.** The frozen header says that
+   `dsg_run_out_dir()` fails only when the name does not fit, and
+   `ui.cpp` says "the path is too long" for its failure and checks the
+   folder itself after. `dsg_run_start()` also refuses before the
+   version check, so a refused start makes no file. Two Runs in one
+   second get one name, and the second is refused ("choose another"): a
+   `--sim` run of rdk takes 64 ms, so a fast second click can see it.
+2. **The version check runs at every start, not once.** It costs
+   0.45 ms median with `ysp_player` in the caller (below), and a player rebuilt between two runs
+   is seen.
+3. **The tick reads on a wake-up, not on each call.** `ui.cpp` calls
+   `dsg_run_tick()` on every frame, input frames too; without a wake-up
+   the tick is an atomic load (0.01 us). The 1 s read without one
+   covers a lost wake-up.
+4. **Files held open, not opened at each read.** No seek (so no 2 GB
+   limit of `long` on Windows), and no `fopen()` per read. The files
+   close at the end.
+5. **`run.c` opens files by their UTF-8 path itself on Windows**
+   (`MultiByteToWideChar()` and `_wfsopen(..., _SH_DENYNO)`, `_wremove()`):
+   `dsg.h` has no reader of a growing file and is frozen, and `fopen()`
+   takes the ANSI code page there. This is the one OS call outside
+   `platform.c`. A later `dsg.h` can move it there.
+6. **The `xrandr` line only for a run with a display**, and not on
+   Windows or macOS, where the command does not exist.
+
+**Found in the frozen interfaces** (none stops an item; nothing changed):
+- The brief and part S ask the info to say that a real run with rig `""`
+  takes `profile.json` when there is one. `dsg_run_info` has no field for
+  it; the player's `session.json` records `rig_profile`. Part V must say
+  it, or not offer "No profile" for a real run when `profile.json` exists.
+- `dsg_proc_poll()`'s status -1 means both "not known" (a child reaped by
+  someone else) and SIGHUP (-signal). The text says "its status is not
+  known" for -1.
+- `ui.cpp`'s message when `dsg_run_out_dir()` fails still says "or Run is
+  not built" (S's stub). Harmless; S's file.
+
+**Measured.** Linux desktop (i5-14500, Debian 12, kernel
+6.11.5-liquorix, governor `performance`), gcc 12.2, Release (Ninja),
+2026-11-22, from this branch. One run under the measuring lock, pinned with
+`taskset -c 2,4`, `DISPLAY` and `WAYLAND_DISPLAY` unset, the files on
+`/tmp` (ext4 on NVMe). Load average 0.95 before, 0.65 after.
+`test_designer_run WORK FAKE PLAYER --measure`: the test appends rows of
+33 columns (about 103 bytes) to a run's `trials.csv` while `fake_player`
+waits, waits for the watch thread's wake-up, then times one
+`dsg_run_tick()`. Median, p95 and max.
+
+| What | Samples | Result |
+|---|---|---|
+| `dsg_player_version()` of `fake_player` | 20 | 250, 374, 374 us |
+| `dsg_player_version()` of `ysp_player` | 20 | 453, 502, 502 us |
+| `dsg_run_start()` of `fake_player`, its version check in it | 20 | 348, 543, 543 us |
+| A tick with no wake-up (no read) | 2,000 | 0.01, 0.01, 0.02 us |
+| A tick that reads one new row, `trials.csv` of 40 rows | 40 | 12.8, 32.1, 38.4 us |
+| The same, 10,040 rows | 40 | 15.3, 31.6, 34.6 us |
+| The same, 100,040 rows | 40 | 11.5, 30.5, 34.2 us |
+| One tick's first read of 9,960 rows (1.0 MB) | 1 | 1.67 ms |
+| One tick's first read of 89,960 rows (9.0 MB) | 1 | 15.2 ms |
+
+A tick that reads costs the same with 40 rows as with 100,040: it reads
+only the new bytes. Most of its 12 us are the poll and two `read()`
+calls. The parse runs at about 600 MB/s, so a tick that read the whole
+file each time would cost 15 ms at 100,000 rows, a whole 60 Hz frame of
+the UI thread; the generated "many" project writes 10,000 trials. A start
+with `ysp_player` was not timed as one; its version check is 0.45 ms of
+it, so the UI thread pays about 0.5 ms at Run.
+
+**Tests.** `test_designer_run WORK FAKE PLAYER` (ctest passes the build
+tree's `fake_player` and `ysp_player`): 150 checks on Linux, about
+3 s.
+- `dsg_run_args()`: the exact argv of the defaults, of a real run with
+  every setting (no `--sim` options), of a simulated run with every
+  setting (no `--windowed`), `--max-seconds` 12.25 as 13 and 172800, a
+  gain of 2.5e-7, 1/3 reading back as the same double, the largest seed;
+  22 refusals, each with an empty argv; `YSP_DESIGNER_TEST`: a real run
+  refused, a simulated one not.
+- `dsg_run_out_dir()`: 2026-11-22 13:45:07, a leap day, 2000-03-01, 1970
+  and the second before it, a participant with `..`, a space, `:`, `/`
+  and UTF-8, none, an empty one, a folder with a trailing separator; a
+  name that does not fit.
+- `dsg_run_exit_text()`: 0, 1, 2, 3, 99, 7, -9, -15, -10 (no name), -1,
+  the `xrandr` line, a small buffer.
+- Refusals that start nothing: an output folder that exists (no log), a
+  log that exists (its bytes stay), another version (`0.0.1`: no log, no
+  folder), a player before `--version` (exit 2), no player, no folder for
+  the answer; the answer's file is removed each time.
+- `fake_player` runs: rows and the last row by name with the columns out
+  of the player's order, a quoted field with a comma, quotes and a line
+  break before them, names that start as `response` and `rt_s` do, a row
+  with an empty response and `rt_s`, a row in two reads with a line break
+  in a quoted field; standard error in the log; the end line; `Done: 4
+  trials in DIR.`. No read without a wake-up (3 writes that the tick did
+  not see, then saw after the wake-up, with the clock held). The log's
+  last 200 lines, a 3,000-byte line cut at 1,024. Exit 1, five lines: the
+  issue, its `rig` with and without `--rig`, `trigger` and `rigid`. Stop:
+  1, STOPPING, exit 3, `Stopped: 2 trials written; trial 2 has no row.`.
+  Kill: refused before a Stop; after a Stop that the player ignores, no
+  Kill at 5 s - 1 ns, Kill at 5 s; a second Stop; -9 with no `xrandr`
+  (`--sim`). SIGINT of a run with a display: `signal 2 (SIGINT)` and the
+  `xrandr` line. A free leaves the player running (it writes its log
+  after). The output folder's missing parents are made.
+- `ysp_player --sim` of rdk (`ypt_build()` of `tests/player/rdk`, seed
+  7, `--field participant=17`): `--version` gives `PL_VERSION_STRING`;
+  exit 0, 40 rows, the last row's response, outcome and rt, the log's one
+  line `ysp_player: 40 trials, DIR, seed 7, experiment ...`, `Done: 40
+  trials in DIR.`, `session.json` there.
+- ThreadSanitizer (gcc 12, Debug, built and run under `setarch -R`,
+  `halt_on_error`): 3 of 3 runs, no report.
+- ctest from the Release tree (examples and the Test Engine on, `DISPLAY`
+  and `WAYLAND_DISPLAY` unset): 146 of 146 (145 before, and
+  `test_designer_run`). clang 24 `-fsyntax-only` (`-Wconversion`,
+  `-Wshorten-64-to-32`, `-Wsometimes-uninitialized`) and emcc
+  `-fsyntax-only` of `run.c`: no warning.
+
+**Hand mutants** (each reverted; each fails `test_designer_run` at the
+check named):
+
+| Mutant | Fails |
+|---|---|
+| r-01: no `YSP_DESIGNER_TEST` refusal | a real run refused under it |
+| r-02: `--windowed` with `--sim` | a simulated run, every setting |
+| r-03: `--rig` with rig `""` | the defaults |
+| r-04: `--max-seconds` cut, not rounded up | 12.25 s rounds up |
+| r-05: a gain at 17 digits | a simulated run, every setting (`0.1`) |
+| r-06: a seed above 2^64 - 1 accepted | its refusal |
+| r-07: a rig ending in `.json` accepted | its refusal |
+| r-08: the participant not made a name | the folder of `../a b:c/` |
+| r-09: the year of January and February | the leap day |
+| r-10: a time before 1970 truncated | 1969-12-31 23:59:59 |
+| r-11: no text for 99 | 99 |
+| r-12: no `xrandr` line | a signal: how to put the display back |
+| r-13: the `xrandr` line for `--sim` too | Kill of a simulated run |
+| r-14: quotes not read | two rows |
+| r-15: columns by place | the last row by name |
+| r-16: a column name by its prefix | the last row by name |
+| r-17: the header counted as a row | two rows |
+| r-18: the log keeps its first lines | 200 lines |
+| r-19: a long line not cut | cut at 1024 |
+| r-20: the issue keeps `ysp_player: ` | exit 1, case 0 |
+| r-21: `rig` as a part of a word | exit 1, `trigger` |
+| r-22: the issue's `rig` without `--rig` | exit 1, case 2 |
+| r-23: no version check | another version is refused |
+| r-24: an output folder that exists not refused | its refusal |
+| r-25: Kill offered at the Stop | Stop went out, no Kill |
+| r-26: Kill after more than 5 s | the tick at 5 s |
+| r-27: Kill without a Stop | Kill before a Stop does nothing |
+| r-28: every tick reads | no wake-up, no read |
+| r-29: the end before the last read | a row in two reads |
+| r-30: exit 1 gives no issue | exit 1, the issue |
+| r-31: no parents made | the folder that is not there |
+| r-32: the log in the data set's name (`DIR-log`) | a log that exists |
+| r-33: an empty `rt_s` as 0 | a row with no response |
+| r-34: never RUNNING | two rows: the state |
+| r-35: a free kills the player | the player went on after the free |
+| r-36: an old player's exit 2 accepted | a player before `--version` |
+| r-37: the answer's file left | its answer's file is gone |
+| r-38: elapsed always 0 | elapsed |
+| r-39: the stop line's trial not read | stopped |
+| r-40: a doubled quote kept double | a row in two reads |
+
+40 of 40 killed.
+
+**Not done, or only by CI.**
+- Windows: the `_WIN32` branches (`_wfsopen()`, the exit texts, the
+  quoting of the command line, the test's Stop that gives 0 and Kill at
+  once) were only syntax-checked: clang 24 `-fsyntax-only` with `_WIN32`
+  defined against hand-written stubs of the Win32 declarations. CI runs
+  them first. Stop's 0 and `kill_offered` at once run only there.
+- macOS: not compiled.
+- No real run (`--sim` only, as the rules say). A real run's
+  `running;` line, Stop through SDL and the `xrandr` advice are from the
+  code.
+
 ## First version
 
 In:
