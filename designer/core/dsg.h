@@ -100,7 +100,10 @@ typedef struct dsg_proc_desc {
     void* ctx;
 } dsg_proc_desc;
 int  dsg_proc_start(dsg_proc** out, const dsg_proc_desc* d, char* err, size_t cap);
-void dsg_proc_stop(dsg_proc* p);           /* SIGTERM; Windows WM_CLOSE */
+/* SIGTERM; Windows WM_CLOSE to each top-level window of the child. 1 when
+ * the request went out; 0 when the child has ended, or (Windows) has no
+ * top-level window, as `ysp_player --sim` has none: then only Kill ends it. */
+int  dsg_proc_stop(dsg_proc* p);
 void dsg_proc_kill(dsg_proc* p);           /* SIGKILL; TerminateProcess */
 /* 1 ended (status: exit code >= 0, or -signal), 0 running. Windows: the
  * exit code as a signed int; Kill's is -9, as SIGKILL's on POSIX. */

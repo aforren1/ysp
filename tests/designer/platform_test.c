@@ -614,9 +614,10 @@ static void proc_tests(const char* work, const char* child) {
         CHECK(p != NULL, "stop: started: %s", err);
         if (p) {
             CHECK(wait_log("term.log", "ready", 5000), "stop: the child is ready");
-            dsg_proc_stop(p);
+            CHECK(dsg_proc_stop(p) == 1, "stop: the request went out");
             CHECK(wait_end(p, 5000, &st) && st == 5, "stop: status 5, got %d", st);
             CHECK(strstr(log_text("term.log"), "got term\n") != NULL, "stop: the child took it: '%s'", log_text("term.log"));
+            CHECK(dsg_proc_stop(p) == 0, "stop: an ended child gets nothing");
             dsg_proc_free(p);
         }
     }
@@ -628,7 +629,7 @@ static void proc_tests(const char* work, const char* child) {
         CHECK(p != NULL, "kill: started: %s", err);
         if (p) {
             CHECK(wait_log("ignore.log", "ready", 5000), "kill: the child is ready");
-            dsg_proc_stop(p);
+            CHECK(dsg_proc_stop(p) == 1, "kill: Stop's request went out");
             t_sleep(300);
             CHECK(dsg_proc_poll(p, &st) == 0, "kill: Stop did not end a child that ignores it");
             dsg_proc_kill(p);
@@ -689,6 +690,21 @@ static void proc_tests(const char* work, const char* child) {
 #endif
         }
     }
+
+#if defined(_WIN32)
+    /* Stop of a child with no window (as `ysp_player --sim`): 0, nothing sent */
+    {
+        const char* a[] = {"sleep", "2000", NULL};
+        p = start_child("nowin.log", a, NULL, NULL, NULL, err, sizeof err);
+        CHECK(p != NULL, "nowin: started: %s", err);
+        if (p) {
+            CHECK(dsg_proc_stop(p) == 0, "nowin: Stop of a child with no window gives 0");
+            dsg_proc_kill(p);
+            CHECK(wait_end(p, 5000, &st) && st == -9, "nowin: Kill ends it, got %d", st);
+            dsg_proc_free(p);
+        }
+    }
+#endif
 
     /* the exit alone wakes: a child that writes nothing */
     {

@@ -443,7 +443,10 @@ int dsg_proc_start(dsg_proc** out, const dsg_proc_desc* d, char* err, size_t cap
     if (err && cap) snprintf(err, cap, "%s", "no processes in a browser");
     return -1;
 }
-void dsg_proc_stop(dsg_proc* p) { (void)p; }
+int dsg_proc_stop(dsg_proc* p) {
+    (void)p;
+    return 0;
+}
 void dsg_proc_kill(dsg_proc* p) { (void)p; }
 int dsg_proc_poll(dsg_proc* p, int* status) {
     (void)p;
@@ -789,20 +792,32 @@ done:
     return rc;
 }
 
-static BOOL CALLBACK proc_close_window(HWND h, LPARAM pid) {
+typedef struct proc_close {
+    DWORD pid;
+    int posted;
+} proc_close;
+
+static BOOL CALLBACK proc_close_window(HWND h, LPARAM arg) {
+    proc_close* c = (proc_close*)arg;
     DWORD owner = 0;
     GetWindowThreadProcessId(h, &owner);
-    if (owner == (DWORD)pid) PostMessageW(h, WM_CLOSE, 0, 0);
+    if (owner == c->pid && PostMessageW(h, WM_CLOSE, 0, 0)) c->posted++;
     return TRUE;
 }
 
-/* The handle keeps the process's ID from reuse while p holds it. */
-void dsg_proc_stop(dsg_proc* p) {
-    if (!p) return;
+/* The handle keeps the process's ID from reuse while p holds it. A child
+ * with no top-level window (a console program, `ysp_player --sim`) gets
+ * nothing: 0, so that the caller offers Kill at once. */
+int dsg_proc_stop(dsg_proc* p) {
+    proc_close c;
+    if (!p) return 0;
+    c.pid = p->pid;
+    c.posted = 0;
     LOCK(&p->lock);
     proc_reap(p);
-    if (!p->ended) EnumWindows(proc_close_window, (LPARAM)p->pid);
+    if (!p->ended) EnumWindows(proc_close_window, (LPARAM)&c);
     UNLOCK(&p->lock);
+    return c.posted > 0;
 }
 
 void dsg_proc_kill(dsg_proc* p) {
@@ -1028,12 +1043,14 @@ fail_log:
     return -1;
 }
 
-void dsg_proc_stop(dsg_proc* p) {
-    if (!p) return;
+int dsg_proc_stop(dsg_proc* p) {
+    int sent = 0;
+    if (!p) return 0;
     LOCK(&p->lock);
     proc_reap(p, 0);
-    if (!p->ended) kill(p->pid, SIGTERM);
+    if (!p->ended) sent = kill(p->pid, SIGTERM) == 0;
     UNLOCK(&p->lock);
+    return sent;
 }
 
 void dsg_proc_kill(dsg_proc* p) {
