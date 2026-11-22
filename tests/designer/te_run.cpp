@@ -224,12 +224,14 @@ void test_build_id(ImGuiTestContext* ctx) {
     IM_CHECK(b != nullptr && b->status == DSG_BUILD_OK);
     if (!b) return;
     IM_CHECK(strncmp(b->pack_id, "sha256:", 7) == 0);
-    char id[72];
-    snprintf(id, sizeof id, "%s", b->pack_id);
+    // the status line names the pack and its ID too: look for the view's
+    char id[96], pack[DSG_PATH_MAX + 16];
+    snprintf(id, sizeof id, "Pack ID: %s", b->pack_id);
+    snprintf(pack, sizeof pack, "Pack:%s/build/run_build.ysppak", dir);   // LogText() adds no space
     const char* t = frame_text(ctx);
     IM_CHECK(strstr(t, id) != nullptr);
     IM_CHECK(strstr(t, "Up to date.") != nullptr);
-    IM_CHECK(strstr(t, "/build/run_build.ysppak") != nullptr);
+    IM_CHECK(strstr(t, pack) != nullptr);
     // an edit: the pack is stale
     IM_CHECK_EQ(dsg_def_set_string(ui_doc(), "/name", "stale now"), 0);
     ctx->Yield();
@@ -255,7 +257,8 @@ void test_build_table(ImGuiTestContext* ctx) {
     ctx->ItemClick(run_item(ctx, "Build"));
     wait_build(ctx);
     IM_CHECK(ui_build_last() != nullptr && ui_build_last()->status == DSG_BUILD_FAILED);
-    IM_CHECK(has_text(ctx, "The last Build failed"));
+    // not the Issues panel's "The last Build failed: 1 errors."
+    IM_CHECK(has_text(ctx, "The last Build failed: 1 error. The Issues panel lists it."));
     const dsg_report* r = ui_report();
     int at = -1;
     for (int i = 0; r && i < r->n_issues; i++)
@@ -292,7 +295,7 @@ void test_sim_end(ImGuiTestContext* ctx) {
     bool sim_arg = false;
     for (int i = 0; rvd_run_arg(i); i++) sim_arg = sim_arg || strcmp(rvd_run_arg(i), "--sim") == 0;
     IM_CHECK(sim_arg);
-    IM_CHECK(has_text(ctx, "Running (simulated)"));
+    IM_CHECK(has_text(ctx, "Running (simulated), "));   // not the status line's "Running (simulated):"
     rvd_run_progress(3, "left", "correct", 0.412, "trial 3");
     ctx->Yield();
 #else
@@ -304,7 +307,13 @@ void test_sim_end(ImGuiTestContext* ctx) {
     IM_CHECK(strstr(t, "correct") != nullptr);
     IM_CHECK(strstr(t, "rt 0.412 s") != nullptr);
     IM_CHECK(strstr(t, "trial 3") != nullptr);
+#ifdef _WIN32
+    // Stop cannot reach a --sim run on Windows (Part P): Kill, and no Stop
+    IM_CHECK(ctx->ItemExists(run_item(ctx, "Kill")));
+    IM_CHECK(!ctx->ItemExists(run_item(ctx, "Stop")));
+#else
     IM_CHECK(!ctx->ItemExists(run_item(ctx, "Kill")));
+#endif
 #if DSG_RUN_VIEW_DOUBLE
     rvd_run_end(0);
 #endif
@@ -322,6 +331,10 @@ void test_sim_end(ImGuiTestContext* ctx) {
 
 void test_stop(ImGuiTestContext* ctx) {
     Scope sc;
+#ifdef _WIN32
+    // no Stop for a --sim run on Windows: run/kill tests what it has
+    (void)ctx;
+#else
     char dir[DSG_PATH_MAX];
     IM_CHECK(open_run(ctx, "rdk", "run_stop", kRdk, dir, sizeof dir));
 #if DSG_RUN_VIEW_DOUBLE
@@ -335,6 +348,7 @@ void test_stop(ImGuiTestContext* ctx) {
     const char* t = frame_text(ctx);
     IM_CHECK(strstr(t, "Stopped") != nullptr);
     IM_CHECK(strstr(t, "records the stop") != nullptr);
+#endif
 }
 
 void test_kill(ImGuiTestContext* ctx) {
@@ -345,8 +359,10 @@ void test_kill(ImGuiTestContext* ctx) {
     // Stop cannot reach the player: Kill at once
     rvd_run_stop_reaches(false);
     IM_CHECK(start_sim(ctx, nullptr));
+#ifndef _WIN32
     ctx->ItemClick(run_item(ctx, "Stop"));
     ctx->Yield();
+#endif
     IM_CHECK(ctx->ItemExists(run_item(ctx, "Kill")));
     IM_CHECK(!ctx->ItemExists(run_item(ctx, "Stop")));
     IM_CHECK(has_text(ctx, "Kill ends the player now. The data set is not closed."));
@@ -362,6 +378,8 @@ void test_kill(ImGuiTestContext* ctx) {
     // Stop that goes out: no Kill until the run offers it
     rvd_run_stop_reaches(true);
 #endif
+#ifndef _WIN32
+    // (Windows: no Stop goes out to a --sim run)
     IM_CHECK(start_sim(ctx, "header trial,response,rt_s,outcome\nterm ignore\nsleep 30000\n"));
     ctx->ItemClick(run_item(ctx, "Stop"));
     ctx->Yield();
@@ -374,6 +392,7 @@ void test_kill(ImGuiTestContext* ctx) {
     ctx->ItemClick(run_item(ctx, "Kill"));
     IM_CHECK(wait_end(ctx, 120));
     IM_CHECK_LT(run_info().exit_status, 0);
+#endif
 }
 
 void test_disabled(ImGuiTestContext* ctx) {
@@ -411,19 +430,15 @@ bool write_rigs() {
            write_profile("lab2.json", "lab two", 600, 400, 1280, "\"trig\": {\"family\": \"triggerbox\", \"key\": \"port:/dev/null\"}");
 }
 
-// The preview's combo (in its Settings) to the built-in simulated rig, with
-// the Run view hidden: its Settings are below the display, in the room left.
+// The preview's combo (in its Settings) to the built-in simulated rig. The
+// Run view is hidden: the Settings are below the display, in the room left.
 void preview_builtin(ImGuiTestContext* ctx) {
-    ctx->ItemClick("//##designer/aux/Run");
-    ctx->Yield();
     const ImGuiTestItemInfo det = ctx->WindowInfo("//##designer/Preview/##details");
     IM_CHECK(det.ID != 0);
     if (!det.ID) return;
     ctx->ItemOpen(ctx->GetID("Settings", det.ID));
     ctx->ItemClick(ctx->GetID("Rig", det.ID));
     ctx->ItemClick("//$FOCUSED/Built-in simulated rig");
-    ctx->ItemClick("//##designer/aux/Run");
-    ctx->Yield();
 }
 
 void test_rig_combo(ImGuiTestContext* ctx) {
@@ -464,17 +479,25 @@ void test_rig_combo(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(ps.session.rig, "lab2");
     t = frame_text(ctx);
     IM_CHECK(strstr(t, "Rig: lab2 (view 600 mm, 1280 px over 400 mm)") != nullptr);
-    IM_CHECK(ctx->ItemExists(te_in_child(ctx, "//##designer/Preview", "##rig")));
     // the profile's details: its role
     IM_CHECK(strstr(t, "triggerbox") != nullptr);
+    // the Run view hidden, the line is the preview's band
+    ctx->ItemClick("//##designer/aux/Run");
+    t = frame_text(ctx);
+    IM_CHECK(ctx->ItemExists(te_in_child(ctx, "//##designer/Preview", "##rig")));
+    IM_CHECK(strstr(t, "Rig: lab2 (view 600 mm, 1280 px over 400 mm)") != nullptr);
+    IM_CHECK(strstr(t, "Built-in simulated rig: view 570 mm") == nullptr);
     // the preview's own combo: the built-in rig
     preview_builtin(ctx);
     dsg_preview_get(ui_preview(), &ps);
     IM_CHECK_STR_EQ(ps.session.rig, "");
     t = frame_text(ctx);
     IM_CHECK(strstr(t, "Built-in simulated rig: view 570 mm") != nullptr);
-    IM_CHECK(strstr(t, "Rig: lab2 (view 600 mm") != nullptr);   // the Run view's
+    IM_CHECK(strstr(t, "Rig: lab2 (view 600 mm") == nullptr);
+    // the Run view keeps its own profile
+    ctx->ItemClick("//##designer/aux/Run");
     IM_CHECK_STR_EQ(ui_run_settings()->rig, "lab2");
+    IM_CHECK(has_text(ctx, "Rig: lab2 (view 600 mm"));
 }
 
 void test_rig_changed(ImGuiTestContext* ctx) {

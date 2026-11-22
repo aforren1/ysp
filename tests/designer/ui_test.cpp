@@ -91,7 +91,7 @@ static bool dialog_offered;
 static bool no_dialog(void*) { dialog_offered = true; return false; }
 static void on_title(void*, const char* t) { titles++; snprintf(title, sizeof title, "%s", t); }
 
-// Part 12: the UI's clock, and the run's wake-ups that main.cpp turns into
+// Part 12: the UI's clock (a frame drawn costs one 60 Hz refresh of it), and the run's wake-ups that main.cpp turns into
 // an event that is not input.
 static int64_t g_vt = 1000000000LL;
 static int64_t vclock(void*) { return g_vt; }
@@ -1148,14 +1148,18 @@ int main(int argc, char** argv) {
                     drawn++;
                     dsg_redraw_drawn(&rd);
                     rd.work = ui_work_pending();
+                    // the swap waits for the display's vertical blank, 60 Hz
+                    g_vt += 16666667;
                 }
             }
             return drawn;
         };
         const int idle = loop(5.0, 0);
         CHECK(idle == 0 && ui_run_active(), "a run goes and nothing changes: %d frames in 5 s", idle);
-        const int wakes0 = g_run_wakes;
+        const int wakes0 = g_run_wakes, checks0 = ui_checks_run();
         const int busy = loop(4.0, 50);
+        ui_wait_checks(30000000000LL);
+        CHECK(ui_checks_run() == checks0, "the frames of a run's progress post no check (%d)", ui_checks_run() - checks0);
         CHECK(g_run_wakes - wakes0 >= 70, "the wake-ups reached the loop (%d)", g_run_wakes - wakes0);
         CHECK(busy <= 4 * DSG_RUN_REDRAW_HZ + 1 && busy >= 4 * DSG_RUN_REDRAW_HZ - 1,
               "trials.csv grows: %d frames in 4 s, at most %d a second", busy, DSG_RUN_REDRAW_HZ);

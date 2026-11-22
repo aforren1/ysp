@@ -453,7 +453,8 @@ void build_section() {
     } else if (b->status == DSG_BUILD_CANCELED) {
         ImGui::TextColored(kWarn, "The last Build was canceled.");
     } else {
-        ImGui::TextColored(kBad, "The last Build failed: %d errors. The Issues panel lists them.", b->report.n_errors);
+        const int n = b->report.n_errors;
+        ImGui::TextColored(kBad, "The last Build failed: %d %s. The Issues panel lists %s.", n, n == 1 ? "error" : "errors", n == 1 ? "it" : "them");
     }
     ImGui::BeginDisabled(!ui_can_build());
     if (ImGui::Button("Build")) ui_build();

@@ -347,6 +347,10 @@ int dsg_run_stop(dsg_run* r, int64_t now_ns) {
     R.stops++;
     if (r->state == DSG_RUN_ENDED) return 0;
     r->stopped = true;
+#ifdef _WIN32
+    /* no SIGTERM, and a --sim run has no window for WM_CLOSE (Part P) */
+    if (r->desc.sim) R.stop_reaches = false;
+#endif
     if (!R.stop_reaches) {
         r->kill_offered = true;
         return 0;
