@@ -121,7 +121,13 @@
  *   cache_max and ypt_cache_trim() bound the folder. Without a cache, and
  *   with a cold or a warm one, every pack has the same bytes; every entry
  *   is byte-identical to v0.11.0's, and the manifest differs by the tool
- *   version.
+ *   version. The ffmpeg step's child gets only its standard input, output
+ *   and error: on Windows a PROC_THREAD_ATTRIBUTE_HANDLE_LIST, where every
+ *   inheritable handle of the process went before (a player's log the
+ *   designer was opening could stay open in ffmpeg); on POSIX
+ *   posix_spawn_file_actions_addclosefrom_np(3) (glibc 2.34 and later;
+ *   macOS POSIX_SPAWN_CLOEXEC_DEFAULT), the pipe close-on-exec, the
+ *   default signal actions, and SCHED_OTHER.
  *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":

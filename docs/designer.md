@@ -1771,6 +1771,19 @@ pack's write), at each check pack build. Part B may want to skip the check pack'
 UBSan, and ThreadSanitizer; the fuzz target `cache_fuzz` (ctest
 `cache_fuzz_short`); 37 of 37 hand mutants killed (pack.md 19).
 
+**Part K2: the ffmpeg step's child** (2026-11-22, after part X found it).
+`run_program()` gave ffmpeg every inheritable handle on Windows and every
+descriptor without close-on-exec on POSIX, so a Build's ffmpeg could
+hold the player's log open. Now: on Windows a handle list of the null
+device and the pipe; on POSIX `addclosefrom_np(3)` (glibc 2.34 and
+later; macOS `POSIX_SPAWN_CLOEXEC_DEFAULT`), a close-on-exec pipe, the
+default signal actions and SCHED_OTHER. Before, a SCHED_FIFO build
+thread would have passed its policy to ffmpeg; no build thread is
+elevated, and now the child is SCHED_OTHER regardless. Tested on Linux
+with the test program as a fake ffmpeg that lists `/proc/self/fd` (3
+checks, 3 of 3 mutants killed); the Windows branch only syntax-checked
+with clang 24 against stubs (pack.md 19, "The ffmpeg step's child").
+
 **Open.** Windows and macOS not compiled or run here (CI); the hit could
 skip the entry's SHA-256 by storing it in the record (pack.md 19,
 "Left").
