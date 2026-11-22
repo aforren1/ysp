@@ -2704,6 +2704,277 @@ Locals that a call fills are initialized (C4701).
   to a table cell were checked in the core only (`dsg_csv_place()`); part
   V's `te_run.cpp` checks the click.
 
+#### Part G as built (2026-11-22)
+
+Branch `step6-g`, from `designer-step6` (`1110636`). Part G fills the rig
+section of `dsg.h` 0.4.0 (`designer/core/rig.c`, which replaces S's stub),
+the rig's parts of `check.c` and `preview.c`, and
+`tests/designer/rig_test.c`. `designer/CMakeLists.txt` (S's file) gains
+only the target `test_designer_rig`. `worker.c` needed nothing: S's
+worker already gives each check job's rig to `dsg_checker_set_rig()`. No
+frozen interface changed.
+
+**`rig.c`.**
+- **The list.** `yrig_dir()`'s regular files `NAME.json`, NAME a profile
+  name of ysp/rigfile.h (1 to 63 of A-Z a-z 0-9 _ -): `profile` first when
+  `profile.json` exists, then the others in byte order. Other files (a
+  save's `profile.json.tmp`, `a.b.json`, a folder `x.json`) are not
+  listed. A rig folder that does not exist yet gives 0 profiles. A
+  folder that `yrig_dir()` refuses gives -1 and `yrig_load()`'s own words
+  ("no rig folder: the config folder is missing, or another user can write
+  it"), so the list, a load and the player say one thing.
+- **The load.** `yrig_load()`, so the folder rule and the loopback and
+  calibration checks are the player's. The calibration file that the
+  profile names is read with it: its bytes, with their size and magic.
+  `dsg_rig_cal()` is not NULL only when they are there and the file's
+  check is OK (part P): the SHA-256 that the profile names, so the bytes
+  are the ones its tool wrote. `ycol_cal_load()`'s whole check (the CRC,
+  and the derived fields against the readings) costs 23 ms ("Measured",
+  below), so the load does not run it: only the checker does, once per
+  load (`dsg_rig__cal_error()`); a failure is an error and takes the
+  checker's `dsg_rig_cal()` away. A session's load and the Run view get
+  the bytes unchecked. A file whose SHA-256 matches but that is not a
+  calibration gets the check DIFFERS in the `dsg_rig`'s copy of the
+  profile (ysp/rigfile.h: "the file is another kind"), so `pl_check()`
+  keeps the calibration need. A `dsg_rig` is 119 KB on the heap (the
+  profile 48 KB, the calibration 62.5 KB, two paths).
+- `dsg_rig_load("")` (or NULL) loads `profile.json`, as `yrig_load()`
+  does: the profile that a real run with no `--rig` loads. The checker's
+  and the preview's `""` is no profile (the checker) or the built-in rig
+  (the preview), as `dsg.h` says; to check what a real run with `""`
+  will use, a caller passes `"profile"` when `dsg_rig_list()` lists it.
+- **`dsg_rig_changed()`**: two `stat()` calls (the profile and its
+  calibration file): size, modification time in ns (Windows: 100 ns
+  ticks), and whether the file is there. The stamp is taken before the
+  read, so a write between the two shows as a change.
+- **`dsg_rig_summary()`**: `Rig: NAME (view 570 mm, 1920 px over 518.4
+  mm)`, `Rig: NAME (no view)`; NAME is the profile's file name, as the
+  combo lists it.
+- **`dsg_rig_counts_per_unit()`**: `1 / (per_count x
+  yrig_units_factor(signal units, role units))` for each lane, with its
+  sign, as `player/v2.c` `v2_rig_signals()` builds the adapter; false
+  (and 1, 1) with no signal, an adapter that is not `raw_mouse`, or units
+  that do not convert.
+- Two functions for `check.c` that are not in `dsg.h`:
+  `dsg_rig__cal_error()` (why the named calibration file does not load)
+  and `dsg_rig__file_key()` (the folder's refusal, and the profile file's
+  size and time, without a parse). `dsg.h` has no way to say either, and
+  part S froze it.
+
+**The check (`check.c`).**
+- **Load once per choice or change.** At each check the checker compares
+  the job's rig name with the one it holds and calls `dsg_rig_changed()`
+  (two stats); it loads again only on a new name or a change. A load that
+  failed is tried again only when `dsg_rig__file_key()` changes, so a
+  broken profile is not parsed at each keystroke. The test proves both:
+  a file rewritten with other bytes but its size and time put back is not
+  read again.
+- `pl_check_desc.rig` is the profile; `.cal` is `dsg_rig_cal()` when it
+  is given, else the stand-in (so the calibration need stays, part P).
+- **The profile's own issues**, each `DSG_FROM_RIG` with `rig` true and
+  no profile name in the message (the Issues panel puts "rig profile
+  'NAME': " before it): a load that failed is an error, and the check runs
+  with no profile; a calibration file that a real start cannot read or
+  load is an error ("a real run refuses to start": `player/lower.c`
+  `pl_cal_load()` reads the profile's calibration at every real or
+  `--sim` start, whatever its check says, and fails when it does not
+  load); each note of `yrig_load()`'s checks is a note (a loopback file
+  missing or changed, a calibration changed).
+- **A refusal that the profile causes.** When the check with a profile
+  does not pass, a second `pl_check()` runs with no profile. Each loader
+  or player error or warning of the first that the second does not give
+  gets `rig` true. The profile's refusal of a role comes from the loader
+  (`DSG_FROM_LOADER`, status DEFINITION, part P's case), not from the
+  player, so both sources are compared. Only a failed check pays for the
+  second one.
+- **`dsg_report.rig` is the chosen profile's name, also when its load
+  failed.** `dsg.h` says "the profile that the check ran with"; with a
+  failed load that is none, and the Issues panel's prefix would then read
+  "rig profile '?'". The load's error says that the check ran with no
+  profile. This is a reading of the frozen comment, not a change of it;
+  part V may prefer the other reading.
+- A folder that others can write is refused at a load. A profile that
+  loaded stays in use until its name or files change; the checker does
+  not call `yrig_dir()` at each check.
+
+**The preview (`preview.c`).**
+- `same_settings()` compares `rig`, so a change restarts the session and a
+  session of the old rig is stale.
+- `pv_load()` loads `settings.rig` with `dsg_rig_load()` on the check
+  thread at each session load (a `dsg_rig` is one thread's, and the
+  session ops have no state of their own to keep one between loads), and
+  gives `pl_sim_desc.rig` and `.cal`. The player copies both, so the
+  `dsg_rig` is freed after the load. A profile that does not load fails
+  the session's load with "the rig profile 'NAME' does not load: ..."
+  (the preview's issue; `rig` is not set, because the preview's rig can
+  differ from the check's). A file change takes effect at the next
+  session load: part V calls `dsg_preview_restart()` on
+  `dsg_rig_changed()`.
+- **The pointer's scale**: from the view that the load gave the gfx (the
+  profile's, for a definition in deg or cm), else the profile's view (a
+  definition in px with a signal role in cm or deg), else the built-in
+  rig's.
+- **The relative role (part P2), decided here: driven with a profile that
+  has its signal.** The sample is the pointer's motion since the last
+  sample in role units times `dsg_rig_counts_per_unit()`: counts at the
+  profile's scale, so the hand moves with the pointer, one role unit per
+  role unit. There is no sample at the first place after a new session,
+  after the pointer left the display or during a pause, so the hand does
+  not jump across a gap. The preview still does not capture the mouse:
+  the hand stops where the pointer leaves the pane. With no profile the
+  role stays undriven ("relative: the preview does not capture the
+  mouse"), as in step 5, because its samples would be role units at the
+  stand-in gain 1, which no real run has. With a profile that has no
+  signal for it: "relative: the rig profile has no signal for it".
+
+**Tests** (`test_designer_rig`, 118 checks; Linux desktop, i5-14500,
+Debian 12, gcc 12.2, Release). The user's config folder is the test's:
+`XDG_CONFIG_HOME` (Windows: `APPDATA`; macOS: `HOME`) at `WORK/cfg`. The
+build tree here is under `/tmp`, which `yrt_user_dir()` refuses (all
+users can write it), so the test then makes
+`~/.cache/ysp_designer_rig_test-PID` and removes it at its end, as
+`tests/adapt/rigfile_test.c` does. It first checks that its rig folder is
+not the user's own.
+1. The list: an empty folder; `profile` first, then byte order; not
+   listed: a bad name, `x.b.json`, `notes.txt`, `profile.json.tmp`, a
+   folder `dir.json`; the cap; no `profile.json`.
+2. A load: the name, the path in the test's folder, the profile, the
+   calibration's bytes, the banner, not changed at once; the counts for
+   px, cm, and deg from cm with a negative y; no signal; units that do
+   not convert; a missing profile; a bad name; NULL.
+3. A loopback file changed after its run: the load's note
+   (`roles.resp.bounds ... UNKNOWN`), the check's `DSG_FROM_RIG` note with
+   `rig` set, and the role tier need back.
+4. (POSIX) The rig folder at mode 0777: the list and the load refuse it
+   with the player's words; the check's error, and the check runs with no
+   profile; at 0700 again, no issue.
+5. The check with a profile: part P's table through the designer
+   (oddball with no profile, `full` and `part`; afc2 with no profile and
+   `room`; visuomotor and bimanual with `full`, bimanual with `part`);
+   `""` is no profile while `profile.json` exists and would refuse every
+   project; the profile's refusal (`resp` bound to `line`) has `rig` set
+   and no profile name, and is gone with no profile; a definition error
+   with a profile and a check pack is not marked; rdk's issues equal with
+   no profile and with `room`; the calibration changed (the need stays, a
+   note, `dsg_rig_cal()` NULL), missing (an error and a note), of the
+   right hash but not a calibration (an error, the need stays), and of the
+   right size, magic and hash with a byte changed after its CRC (the
+   checker's whole check: an error, the need stays).
+6. Loads once per choice or change: other bytes with the size and time
+   put back are not read; a new time is; a new size is; a broken profile
+   (an error, again at the next check, the name not in the message); a
+   good one of the broken one's size and time is not parsed; a fix with a
+   new size is; a new name is.
+7. The preview: the pointer at (5, -3) deg at the profile's 83.8 px a
+   degree (view 1000 mm, 400 mm over 1920 px) ends a region's state, in
+   a deg definition and in a px one; a change of the rig restarts the
+   session, and the built-in rig's scale does not end it; a relative role
+   in deg with a signal in cm (per_count 0.01, -0.02): undriven with the
+   built-in rig, driven with the profile, no motion at the first place
+   (whose distance from the last session's last place would end the
+   state), none across a gap out of the display (likewise), half way stays,
+   (4, 2) deg ends it; a profile with no signal for it; the file changed
+   and a restart takes the new view, at 36.8 px a degree; a profile that
+   does not load is the preview's issue with its name.
+8. The same deg session on the check thread, with checks of two profiles
+   posted while it runs (for ThreadSanitizer).
+
+ThreadSanitizer (gcc 12, RelWithDebInfo, built and run under
+`setarch -R`): `test_designer_rig`, `test_designer_preview` and
+`test_designer_worker`, no report. ctest from the Release build tree,
+examples and the Test Engine on, `DISPLAY` and `WAYLAND_DISPLAY` unset:
+146 of 146 (S's 145 and `test_designer_rig`). clang 24 `-fsyntax-only`
+(`-Wsometimes-uninitialized`, `-Wconversion`, `-Wshorten-64-to-32`) on
+the four changed C files: no warning.
+
+**Hand mutants** (each reverted; each fails `test_designer_rig` at the
+check named):
+
+| Mutant | Fails |
+|---|---|
+| g-01: `profile` not put first | the list's order |
+| g-02: any name listed | the list (a bad name) |
+| g-03: a folder `x.json` listed | the list |
+| g-04: the calibration's bytes not kept | the calibration's bytes; cal crc |
+| g-05: `dsg_rig_cal()` whatever the check | `dsg_rig_cal()` of a changed file |
+| g-06: `dsg_rig_changed()` sees no change of the profile | a changed file is loaded again |
+| g-07: `dsg_rig_changed()` always true | not changed at once; no load with the files unchanged |
+| g-08: the banner in cm | the banner |
+| g-09: the counts without the sign | the counts; the relative hand |
+| g-10: the counts without the units' factor | the counts; the relative hand |
+| g-11: an unreadable calibration is no error | cal missing |
+| g-12: no DIFFERS for a file that is not a calibration | cal junk; cal crc |
+| g-13: a refused folder lists nothing, no error | the folder's list |
+| g-14: `yrig_load_file()` (no folder rule) | a bad name; the folder |
+| g-15: the list not sorted | the list's order |
+| g-16: the list past the cap | cap 2 |
+| g-17: no whole check of the calibration | cal crc |
+| c-01: `pl_check_desc.rig` not given | part P's needs |
+| c-02: no profile issues | the note; the folder; the calibration |
+| c-03: the profile's issues without `rig` | the note's `rig` |
+| c-04: no second check | the profile's refusal is marked |
+| c-05: every error marked | a definition error is not marked |
+| c-06: a load at every check | no load with the files unchanged |
+| c-07: a failed load parsed at every check | a failed profile not parsed again |
+| c-08: `dsg_report.rig` empty | the report's rig |
+| c-09: the load's error names the profile | the name not in the message |
+| c-10: no error for the calibration | cal missing; cal junk |
+| c-11: no notes | the note; cal changed |
+| c-12: `""` loads `profile.json` | `""` is no profile |
+| p-01: `same_settings()` ignores the rig | a change of the rig restarts |
+| p-02: `pl_sim_desc.rig` not given | the deg session at the profile's scale |
+| p-03: a relative role never driven | driven with the profile's signal |
+| p-04: role units as counts | the relative hand at (4, 2) deg |
+| p-05: no reset when the pointer leaves | no motion across a gap |
+| p-06: a sample at the first place | no motion at the first place |
+| p-07: no profile's view for a px definition | the px session |
+| p-08: the session's error without the name | the preview's issue names it |
+| p-09: one reason for every undriven relative role | no signal for it |
+| p-10: y's motion reversed | the relative hand |
+
+39 of 39 killed.
+
+**Measured** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release, one
+P-core by `taskset -c 2`, under the measurement lock, load average 0.97
+before and 1.06 after; a first run with the load at 1.1 to 2.1 gave the
+same rig and check numbers, and its session loads drifted with the load;
+median, p95 in parentheses). A bench program in the scratch folder, not
+in the repository.
+
+| What | Time |
+|---|---|
+| `dsg_rig_load()`: a profile with 2 roles, a loopback, a calibration, a view and 2 signals | 191 us (196) |
+| `ycol_cal_load()`'s whole check of the calibration (the checker, once a load) | 23.2 ms (23.3) |
+| `dsg_rig_changed()`: two stats | 0.6 us (0.6) |
+| `dsg_rig_list()`: 3 profiles | 4.6 us (5.6) |
+| A check, the texts unchanged: rdk, no profile / `room` | 574 / 588 us |
+| oddball, no profile / `full` | 627 / 640 us |
+| oddball, `wrong` (refused: the second `pl_check()`) | 755 us |
+| bimanual, no profile / `full` | 5.20 / 5.19 ms |
+| A session's load: oddball, no profile / `full` | 2.94 / 4.08 ms |
+| bimanual, no profile / `full` | 8.27 / 9.52 ms |
+
+- A profile adds 14 to 16 us to a check (two stats and the player's copy
+  of the 48 KB profile); a refusal with a profile adds the second check,
+  128 us on oddball.
+- A session's load with a profile costs 1.1 to 1.2 ms more: 0.19 ms is
+  `dsg_rig_load()`; the rest is the player's load with a profile and a
+  calibration, not split here (with a given calibration `pl_cal_load()`
+  opens the color context even for a definition that does not require
+  one). Both are on the check thread.
+- The plan's 176 us a load is `yrig_load()` with the calibration's
+  SHA-256; `ycol_cal_load()` adds 23 ms, which is why the load reads only
+  the bytes. Part V's own `dsg_rig_load()` on the UI thread costs 0.19
+  ms, once per choice or change.
+
+**Not done.**
+- No window and no display: the preview ran on gfx's null backend.
+- The Windows branches of `rig.c` (`FindFirstFileW()`,
+  `GetFileAttributesExW()`) and macOS were not compiled; clang 24's
+  `-fsyntax-only` checked the POSIX code of the changed files.
+- `dsg.h`'s comment on `dsg_report.rig` (above) is read as the chosen
+  profile; S or V may want it said in `dsg.h`.
+
 ## First version
 
 In:
