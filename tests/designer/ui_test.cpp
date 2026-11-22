@@ -52,6 +52,12 @@
 //      it ends, a simulated one does not; a run's wake-up brings a frame at
 //      most DSG_RUN_REDRAW_HZ times a second; Quit while a run goes asks,
 //      Cancel keeps both, and "Stop the run" stops it and quits at its end.
+//  12. The Run view (step 6, part V), on build_run_double.c, with main.cpp's
+//      loop played on a virtual clock (UiPlatform.now_ns): while a run goes
+//      and nothing changes, the loop draws no frame (the Run view shown);
+//      while trials.csv grows (a wake-up every 50 ms), at most
+//      DSG_RUN_REDRAW_HZ frames a second. After a Kill, a real run's end
+//      shows how to put the display back; a simulated run's does not.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
@@ -84,6 +90,13 @@ static bool dialog_offered;
 
 static bool no_dialog(void*) { dialog_offered = true; return false; }
 static void on_title(void*, const char* t) { titles++; snprintf(title, sizeof title, "%s", t); }
+
+// Part 12: the UI's clock, and the run's wake-ups that main.cpp turns into
+// an event that is not input.
+static int64_t g_vt = 1000000000LL;
+static int64_t vclock(void*) { return g_vt; }
+static int g_run_wakes;
+static void on_wake_run(void*) { g_run_wakes++; }
 
 // One frame as main.cpp draws it, with the renderer's part for textures.
 static void frame() {
@@ -348,6 +361,18 @@ int main(int argc, char** argv) {
     if (dsg_make_dir(work, err, sizeof err) || !project(work, "rdk", dir, sizeof dir) || !project(work, "rdk2", dir2, sizeof dir2)) {
         printf("FAIL: the work folder: %s\n", err);
         return 1;
+    }
+
+    // Step 6: the Run view lists the rig folder; never the user's own
+    {
+        char xdg[DSG_PATH_MAX];
+        if (dsg_join(xdg, sizeof xdg, work, "xdg") == 0 && dsg_make_dir(xdg, err, sizeof err) == 0) {
+#ifdef _WIN32
+            _putenv_s("APPDATA", xdg);
+#else
+            setenv("XDG_CONFIG_HOME", xdg, 1);
+#endif
+        }
     }
 
     ImGui::CreateContext();
@@ -1052,6 +1077,121 @@ int main(int argc, char** argv) {
         CHECK(ui_project() == nullptr && !ui_run_active(), "at the run's end it quits (the project closed)");
 #endif
     }
+
+#if DSG_BUILD_RUN_DOUBLE
+    // 12. the Run view: idle, the redraw rate, the display's restore
+    {
+        ui_shutdown();
+        UiPlatform vp = plat;
+        vp.now_ns = vclock;
+        vp.wake_run = on_wake_run;
+        CHECK(ui_init(YSP_DESIGNER_FONT_DIR, &vp, err, sizeof err), "ui_init with a clock: %s", err);
+        brd_reset();
+        ui_open(dir);
+        settle();
+        CHECK(ui_project() != nullptr, "the project opened: '%s'", ui_status());
+        ui_show_aux(false);
+        ui_show_aux_view("run", true);
+        dsg_run_settings* rs = ui_run_settings();
+        rs->sim = true;
+        settle();
+        CHECK(ui_run_start(), "Run: '%s'", ui_status());
+        settle();
+        CHECK(ui_run_active() && child_drawn("Run"), "a simulated run goes, the Run view shown");
+        CHECK(!ui_animating(), "the Run view does not animate");
+
+        // main.cpp's loop: block until the next event or the time that the
+        // redraw rule or ui_run_wait_ms() gives, then draw if a frame is due.
+        // wake_ms > 0: the watch thread wakes the loop that often (the log or
+        // trials.csv grew). The frames drawn, over seconds of the clock.
+        auto loop = [&](double seconds, int wake_ms) {
+            dsg_redraw rd = {};
+            rd.work = ui_work_pending();
+            const int64_t end = g_vt + (int64_t)(seconds * 1e9);
+            int64_t next_wake = wake_ms > 0 ? g_vt + (int64_t)wake_ms * 1000000 : INT64_MAX;
+            int64_t last = g_vt;
+            int drawn = 0;
+            const int queued = 0;
+            while (g_vt < end) {
+                int wait = dsg_redraw_wait_ms(&rd, queued, ui_animating());
+                const int run_wait = ui_run_wait_ms();
+                if (run_wait >= 0 && (wait < 0 || run_wait < wait)) wait = run_wait;
+                const int64_t until = wait < 0 ? INT64_MAX : g_vt + (int64_t)wait * 1000000;
+                if (next_wake <= until && next_wake < end) {
+                    g_vt = next_wake;
+                    next_wake += (int64_t)wake_ms * 1000000;
+                    brd_run_wake();   // as the watch thread: not input, no settle frames
+                } else if (until >= end) {
+                    g_vt = end;
+                    break;
+                } else {
+                    g_vt = until;
+                }
+                if (dsg_redraw_due(&rd, queued, ui_animating()) || ui_run_wait_ms() == 0) {
+                    ImGui::GetIO().DeltaTime = (float)ImMax(1e-4, (double)(g_vt - last) * 1e-9);
+                    last = g_vt;
+                    ui_wait_checks(30000000000LL);
+                    ImGui::NewFrame();
+                    skt_frame_begin();
+                    ui_frame();
+                    skt_frame_end();
+                    ImGui::Render();
+                    for (ImTextureData* t : ImGui::GetPlatformIO().Textures) {
+                        if (t->Status == ImTextureStatus_WantCreate || t->Status == ImTextureStatus_WantUpdates) {
+                            t->SetTexID((ImTextureID)1);
+                            t->SetStatus(ImTextureStatus_OK);
+                        } else if (t->Status == ImTextureStatus_WantDestroy) {
+                            t->SetTexID(ImTextureID_Invalid);
+                            t->SetStatus(ImTextureStatus_Destroyed);
+                        }
+                    }
+                    drawn++;
+                    dsg_redraw_drawn(&rd);
+                    rd.work = ui_work_pending();
+                }
+            }
+            return drawn;
+        };
+        const int idle = loop(5.0, 0);
+        CHECK(idle == 0 && ui_run_active(), "a run goes and nothing changes: %d frames in 5 s", idle);
+        const int wakes0 = g_run_wakes;
+        const int busy = loop(4.0, 50);
+        CHECK(g_run_wakes - wakes0 >= 70, "the wake-ups reached the loop (%d)", g_run_wakes - wakes0);
+        CHECK(busy <= 4 * DSG_RUN_REDRAW_HZ + 1 && busy >= 4 * DSG_RUN_REDRAW_HZ - 1,
+              "trials.csv grows: %d frames in 4 s, at most %d a second", busy, DSG_RUN_REDRAW_HZ);
+        const int after = loop(3.0, 0);
+        printf("  part 12: %d frames in 5 s idle; %d in 4 s with a wake-up every 50 ms; %d in the 3 s after\n", idle, busy, after);
+        CHECK(after <= 1, "the wake-ups stop: %d frames in 3 s", after);
+
+        // Kill: a simulated run's end has no display to put back
+        CHECK(ui_run_stop() == 1, "Stop went out");
+        frame();
+        ui_run_kill();
+        frame();
+        frame_log();
+        CHECK(!ui_run_active() && strstr(g_log, "Ended:") && strstr(g_log, "did not close its data set"), "killed: the end says so");
+        CHECK(strstr(g_log, "gamma ramp is wrong") == nullptr && strstr(g_log, "--gamma 1:1:1") == nullptr,
+              "a simulated run: no display to put back");
+        // a real run's Kill: the display's restore (the double starts no player)
+        rs->sim = false;
+        CHECK(ui_run_start(), "a real run: '%s'", ui_status());
+        frame();
+        frame_log();
+        CHECK(ui_run_active() && strstr(g_log, "The preview stops while a real run goes."), "a real run goes; the preview stops");
+        ui_run_stop();
+        frame();
+        ui_run_kill();
+        frame();
+        frame_log();
+#if defined(_WIN32) || defined(__APPLE__)
+        CHECK(strstr(g_log, "restart the computer") != nullptr, "a real run killed: how to put the display back");
+#else
+        CHECK(strstr(g_log, "gamma ramp is wrong") && strstr(g_log, "xrandr --output OUT --mode 1920x1080 --rate 60 --gamma 1:1:1"),
+              "a real run killed: the xrandr command that puts the display back");
+#endif
+        brd_reset();
+    }
+#endif
 
     ui_shutdown();
     ImGui::DestroyContext();

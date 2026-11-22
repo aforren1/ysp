@@ -24,6 +24,7 @@
 //                        long_panel, drag, select_commits, rename,
 //                        collapsed.
 //   preview/*            the preview's pane (te_preview.cpp, step 5 part B).
+//   run/*                the Run view (te_run.cpp, step 6 part V).
 //   docs/designer.md, "Decisions of step 4", says what each one checks.
 // Each test sends the engine's mouse and keys through ImGui's input queue,
 // as a person would. Exit 0 when every test passes, 1 otherwise.
@@ -330,6 +331,8 @@ int main(int argc, char** argv) {
     io.ConfigInputTextCursorBlink = false;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
     UiPlatform plat = { nullptr, no_dialog, nullptr, nullptr };
+    // Step 6: te_run.cpp fills the buffer before each run starts.
+    plat.player_path = te_run_player();
     if (!ui_init(YSP_DESIGNER_FONT_DIR, &plat, err, sizeof err)) {
         printf("FAIL: ui_init: %s\n", err);
         return 1;
@@ -359,6 +362,7 @@ int main(int argc, char** argv) {
     te_register_tables(engine);
     te_register_panels(engine);
     te_register_preview(engine);
+    te_register_run(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);

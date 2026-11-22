@@ -1,5 +1,6 @@
 // te_common.h - what the Test Engine runner (te_test.cpp) gives the parts'
-// test files (te_chart.cpp, te_tables.cpp, te_panels.cpp, te_preview.cpp).
+// test files (te_chart.cpp, te_tables.cpp, te_panels.cpp, te_preview.cpp,
+// te_run.cpp).
 // Shared: a part adds its tests in its own file and does not change this
 // one.
 #pragma once
@@ -27,3 +28,9 @@ void te_register_chart(ImGuiTestEngine* e);    // "chart"
 void te_register_tables(ImGuiTestEngine* e);   // "tables"
 void te_register_panels(ImGuiTestEngine* e);   // "panels"
 void te_register_preview(ImGuiTestEngine* e);  // "preview" (step 5, part B)
+// "run" (step 6, part V). Sets XDG_CONFIG_HOME (Windows: APPDATA) to a
+// folder of the work folder and YSP_DESIGNER_TEST before any frame.
+void te_register_run(ImGuiTestEngine* e);
+// The player that UiPlatform.player_path names: a buffer that te_run.cpp
+// fills per test (the double's name, or R's fake_player).
+const char* te_run_player();

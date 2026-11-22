@@ -8,6 +8,13 @@
 // pane reads them with dsg_preview_get() and changes them with
 // dsg_preview_set(). Names from the definition and the data set's folder are
 // user text, so Skribidi draws them (skt.h).
+//
+// Step 6, part V: the rig profile (decision 14). The settings' rig names a
+// profile of the user's rig folder, or "" for the built-in simulated rig; a
+// combo in Settings chooses it, and a band above the "Faithful" banner names
+// it. The pane keeps its own dsg_rig for that band (dsg.h: one thread's
+// each), loaded once per choice and again when its file changes, which also
+// restarts the session (the session's load reads the file).
 #include "views.h"
 #include "skt.h"
 #include "player.h"   // PL_NEED_FIELD
@@ -53,6 +60,15 @@ struct Pane {
     float rt_s = 0;
     int pin_row = 0;
     char fields[DSG_SESSION_FIELDS][256] = {};
+    // Step 6: the profile that the band names; its name, loaded or not.
+    dsg_rig* rig = nullptr;
+    char rig_name[DSG_RIG_NAME] = "";
+    bool rig_tried = false;
+    char rig_err[256] = "";
+    int64_t rig_seen_ns = 0;
+    // the rig folder's profiles, read when the combo opens
+    char names[64][DSG_RIG_NAME] = {};
+    int n_names = 0;
 };
 Pane P;
 
@@ -93,6 +109,99 @@ void banner(const char* id, ImU32 bg, const char* text) {
     ImGui::PushStyleColor(ImGuiCol_Text, kText);
     ImGui::RenderTextWrapped(ImVec2(p.x + st.FramePadding.x, p.y + st.FramePadding.y), text, nullptr, wrap);
     ImGui::PopStyleColor();
+}
+
+// --- the rig profile (step 6) -----------------------------------------------------
+
+void load_rig(const char* name) {
+    dsg_rig_free(P.rig);
+    P.rig = nullptr;
+    P.rig_err[0] = 0;
+    snprintf(P.rig_name, sizeof P.rig_name, "%s", name);
+    P.rig_tried = true;
+    P.rig_seen_ns = ui_now_ns();
+    dsg_rig* r = nullptr;
+    if (name[0] && dsg_rig_load(name, &r, P.rig_err, sizeof P.rig_err) == 0) P.rig = r;
+}
+
+// The band's profile follows the settings; a change of its file (a stat, at
+// most once a second) loads it again and restarts the session, whose load
+// reads the file.
+void sync_rig(const dsg_preview_settings& ps) {
+    if (!P.rig_tried || strcmp(ps.session.rig, P.rig_name) != 0) {
+        load_rig(ps.session.rig);
+        return;
+    }
+    const int64_t now = ui_now_ns();
+    if (!P.rig_name[0] || (now >= P.rig_seen_ns && now - P.rig_seen_ns < 1000000000LL)) return;
+    P.rig_seen_ns = now;
+    if (P.rig && !dsg_rig_changed(P.rig)) return;
+    char keep[DSG_RIG_NAME];
+    snprintf(keep, sizeof keep, "%s", P.rig_name);
+    load_rig(keep);
+    dsg_preview_restart(pv());
+}
+
+// The band above the "Faithful" banner: the profile in use, or the built-in
+// rig (docs/designer.md, "The views" of step 6). The profile's name is user
+// text: Skribidi draws the line.
+void rig_band(const dsg_preview_settings& ps) {
+    char line[512];
+    if (!ps.session.rig[0]) snprintf(line, sizeof line, "Built-in simulated rig: view 570 mm, 1920 px over 518.4 mm; no devices, no signals.");
+    else if (P.rig) dsg_rig_summary(P.rig, line, sizeof line);
+    else snprintf(line, sizeof line, "Rig: %s does not load: %s", ps.session.rig, P.rig_err[0] ? P.rig_err : "no reason given");
+    ImGui::LogText("%s", line);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImMax(ImGui::GetContentRegionAvail().x, 50.0f);
+    const float h = ImGui::GetTextLineHeight() + 2 * st.FramePadding.y;
+    const ImRect r(p, ImVec2(p.x + w, p.y + h));
+    ImGui::ItemSize(r);
+    if (!ImGui::ItemAdd(r, ImGui::GetID("##rig"))) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(r.Min, r.Max, ps.session.rig[0] && !P.rig ? kBannerStale : kBannerInfo, st.FrameRounding);
+    const skb_layout_t* l = skt_layout(line, ui_text_size());
+    if (!l) return;
+    const skb_rect2_t b = skb_layout_get_bounds(l);
+    dl->PushClipRect(r.Min, r.Max, true);
+    skt_draw_layout(dl, l, p.x + st.FramePadding.x, p.y + (h - b.height) * 0.5f - b.y, 1.0f, kText);
+    dl->PopClipRect();
+}
+
+// The preview's profile: the built-in simulated rig ("") or one of the rig
+// folder's (decision 14). A change restarts the session (dsg_preview_set()).
+void rig_combo(dsg_preview_settings& ps) {
+    ImGui::SetNextItemWidth(220);
+    if (ImGui::BeginCombo("Rig", "")) {
+        char err[256];
+        const int n = dsg_rig_list(P.names, 64, err, sizeof err);
+        P.n_names = n > 0 ? n : 0;
+        if (ImGui::Selectable("Built-in simulated rig", !ps.session.rig[0]) && ps.session.rig[0]) {
+            ps.session.rig[0] = 0;
+            apply(ps);
+        }
+        for (int i = 0; i < P.n_names; i++) {
+            ImGui::PushID(i);
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            if (ImGui::Selectable("##rig", strcmp(ps.session.rig, P.names[i]) == 0, 0, ImVec2(0, ImGui::GetFrameHeight())) &&
+                strcmp(ps.session.rig, P.names[i]) != 0) {
+                snprintf(ps.session.rig, sizeof ps.session.rig, "%s", P.names[i]);
+                apply(ps);
+            }
+            ImGui::LogText("%s", P.names[i]);
+            skt_draw_layout(ImGui::GetWindowDrawList(), skt_layout(P.names[i], ui_text_size()), at.x + 2, at.y + 1, 1.0f, kText);
+            ImGui::PopID();
+        }
+        if (n < 0) ImGui::TextDisabled("The rig folder gives no profile: %s", err);
+        ImGui::EndCombo();
+    }
+    if (ImGui::BeginComboPreview()) {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const char* shown = ps.session.rig[0] ? ps.session.rig : "Built-in simulated rig";
+        skt_draw_layout(ImGui::GetWindowDrawList(), skt_layout(shown, ui_text_size()), at.x, at.y - 1, 1.0f, kText);
+        ImGui::EndComboPreview();
+    }
+    ImGui::SetItemTooltip("The rig profile whose view, signals and calibration the session takes; devices never open here");
 }
 
 // --- the status -------------------------------------------------------------------
@@ -482,6 +591,7 @@ void settings_section(dsg_preview_settings& ps) {
     }
     ImGui::SetItemTooltip("The scripted participant's response time, in seconds");
     ImGui::PopItemWidth();
+    rig_combo(ps);
     pin_fields(ps);
     field_rows(ps);
 }
@@ -563,6 +673,8 @@ void draw() {
     // but does not rescale it (hand test, 2026-11-21).
     const float room = ImGui::GetContentRegionAvail().y, top = ImGui::GetCursorPosY();
     float varying = status_line(in);
+    sync_rig(ps);
+    rig_band(ps);
     char buf[256];
     snprintf(buf, sizeof buf,
              "Faithful in logic, not in timing: a simulated %d Hz display paced by this window; input times are frame times; no sound.",
@@ -605,12 +717,17 @@ void draw() {
 
 bool animating() { return dsg_preview_animating(pv()); }
 
-void closed() { P = Pane(); }
+void closed() {
+    dsg_rig_free(P.rig);
+    P = Pane();
+}
+
+void shutdown() { closed(); }
 
 } // namespace
 
 extern const UiView ui_view_preview = {
     "preview", "Preview", UI_SLOT_AUX,
-    nullptr, nullptr, nullptr, closed, nullptr,
+    nullptr, shutdown, nullptr, closed, nullptr,
     draw, nullptr, nullptr, animating, nullptr, nullptr,
 };
