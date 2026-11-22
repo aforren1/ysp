@@ -46,7 +46,9 @@ typedef struct rig_stamp {
 struct dsg_rig {
     yrig_profile prof;                 /* 48 KB                               */
     ycol_cal     cal;                  /* 62,528 bytes                        */
-    bool         have_cal;             /* read, valid and its check is OK     */
+    bool         cal_read;             /* its bytes are in cal: size and magic */
+    int          cal_verified;         /* ycol_cal_load()'s full check: 0 not
+                                        * run yet, 1 passed, -1 failed         */
     char         cal_error[320];       /* named and it does not load: why     */
     char         name[DSG_RIG_NAME];
     char         path[DSG_PATH_MAX];
@@ -191,6 +193,13 @@ int dsg_rig_list(char (*names)[DSG_RIG_NAME], int cap, char* err, size_t err_cap
     return k;
 }
 
+/* A file of the right hash that is not a calibration is another kind:
+ * ysp/rigfile.h's DIFFERS, so pl_check() keeps the calibration need (it
+ * meets it only with an OK check). */
+static void cal_differs(dsg_rig* r) {
+    if (r->prof.display.check == YRIG_CHECK_OK) r->prof.display.check = YRIG_CHECK_DIFFERS;
+}
+
 int dsg_rig_load(const char* name, dsg_rig** out, char* err, size_t cap) {
     char dir[1024];
     dsg_rig* r;
@@ -217,16 +226,22 @@ int dsg_rig_load(const char* name, dsg_rig** out, char* err, size_t cap) {
         snprintf(r->cal_path, sizeof r->cal_path, "%s/%s", r->prof.dir, r->prof.display.calibration);
         stamp_of(r->cal_path, &r->st_cal);
         /* the player reads it at a real start whatever its check says, and
-         * refuses to start when it does not load (player/lower.c) */
-        if (dsg_read_file(r->cal_path, &bytes, &n, why, sizeof why) != 0)
+         * refuses to start when it does not load (player/lower.c). The
+         * bytes only here: ycol_cal_load()'s check of the derived fields
+         * costs 23 ms, which the checker pays once (dsg_rig__cal_error()),
+         * not each session's load or the Run view's frame. An OK check
+         * means the SHA-256 that the profile names, so the bytes are the
+         * ones its tool wrote. */
+        if (dsg_read_file(r->cal_path, &bytes, &n, why, sizeof why) != 0) {
             snprintf(r->cal_error, sizeof r->cal_error, "the calibration file '%s' cannot be read", r->prof.display.calibration);
-        else if (ycol_cal_load(&r->cal, bytes, n, why, sizeof why) < 0) {
-            snprintf(r->cal_error, sizeof r->cal_error, "the calibration file '%s': %.200s", r->prof.display.calibration, why);
-            /* its hash is right, but it is not a calibration: the file is
-             * another kind, ysp/rigfile.h's DIFFERS, so pl_check() keeps
-             * the calibration need (it meets it only with an OK check) */
-            if (r->prof.display.check == YRIG_CHECK_OK) r->prof.display.check = YRIG_CHECK_DIFFERS;
-        } else r->have_cal = r->prof.display.check == YRIG_CHECK_OK;
+        } else if (n != sizeof r->cal || memcmp(bytes, "YSPCAL", 6) != 0) {
+            snprintf(r->cal_error, sizeof r->cal_error, "the calibration file '%s': not a calibration (%lu bytes, want %u with magic YSPCAL)",
+                     r->prof.display.calibration, (unsigned long)n, (unsigned)sizeof r->cal);
+            cal_differs(r);
+        } else {
+            memcpy(&r->cal, bytes, sizeof r->cal);
+            r->cal_read = true;
+        }
         free(bytes);
     }
     *out = r;
@@ -241,7 +256,9 @@ const char* dsg_rig_path(const dsg_rig* r) { return r ? r->path : ""; }
 
 const struct yrig_profile* dsg_rig_profile(const dsg_rig* r) { return r ? &r->prof : NULL; }
 
-const struct ycol_cal* dsg_rig_cal(const dsg_rig* r) { return r && r->have_cal ? &r->cal : NULL; }
+const struct ycol_cal* dsg_rig_cal(const dsg_rig* r) {
+    return r && r->cal_read && r->cal_verified >= 0 && r->prof.display.check == YRIG_CHECK_OK ? &r->cal : NULL;
+}
 
 bool dsg_rig_changed(const dsg_rig* r) {
     rig_stamp st;
@@ -276,9 +293,28 @@ bool dsg_rig_counts_per_unit(const dsg_rig* r, const char* role, int role_units,
 
 /* Why the calibration file that the profile names does not load ("": it
  * loads, or none is named). A real start refuses then (player/lower.c
- * pl_cal_load()), whatever the file's check says. */
-const char* dsg_rig__cal_error(const dsg_rig* r);
-const char* dsg_rig__cal_error(const dsg_rig* r) { return r ? r->cal_error : ""; }
+ * pl_cal_load()), whatever the file's check says. The first call runs
+ * ycol_cal_load()'s whole check (23 ms) on the bytes the load read; a
+ * failure also takes dsg_rig_cal() away. */
+const char* dsg_rig__cal_error(dsg_rig* r);
+const char* dsg_rig__cal_error(dsg_rig* r) {
+    if (!r) return "";
+    if (r->cal_read && r->cal_verified == 0) {
+        ycol_cal* tmp = (ycol_cal*)malloc(sizeof *tmp);
+        char why[256];
+        if (!tmp) return "";   /* again at the next call */
+        why[0] = 0;
+        if (ycol_cal_load(tmp, &r->cal, sizeof r->cal, why, sizeof why) < 0) {
+            r->cal_verified = -1;
+            snprintf(r->cal_error, sizeof r->cal_error, "the calibration file '%s': %.200s", r->prof.display.calibration, why);
+            cal_differs(r);
+        } else {
+            r->cal_verified = 1;
+        }
+        free(tmp);
+    }
+    return r->cal_error;
+}
 
 /* What a load of name would find: the folder's refusal, and the profile
  * file's size and time. The checker loads a profile that failed again

@@ -502,7 +502,7 @@ static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, si
 /* --- the rig profile -------------------------------------------------------- */
 
 /* rig.c's, for the checker only (not dsg.h's: frozen by part S) */
-const char* dsg_rig__cal_error(const dsg_rig* r);
+const char* dsg_rig__cal_error(dsg_rig* r);
 uint64_t dsg_rig__file_key(const char* name);
 
 /* The profile of c->rig_name. A load costs 176 us, so it runs again only
@@ -534,7 +534,7 @@ static dsg_rig* load_rig(dsg_checker* c) {
 /* The profile's own issues: a load that failed, a calibration file that a
  * real start cannot read, and each note of yrig_load()'s checks. The Issues
  * panel puts "rig profile 'NAME': " before each (dsg_issue.rig). */
-static void rig_issues(dsg_checker* c, const dsg_rig* rig) {
+static void rig_issues(dsg_checker* c, dsg_rig* rig) {
     const yrig_profile* pr;
     dsg_issue* is;
     int i;
@@ -594,7 +594,7 @@ int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, siz
     tables_in ti;
     const tables_in* tables = &ti;
     pl_check_result res;
-    int i, i0, i1;
+    int i, i0 = 0, i1 = 0;
     bool derive_failed = false;
     dsg_rig* rig;
     char derive_err[1024];

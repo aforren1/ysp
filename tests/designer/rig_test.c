@@ -607,6 +607,23 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
         CHECK(count_issues(rep, DSG_FROM_RIG, DSG_SEV_ERROR, "display.yspcal", &rig) == 1 && rig && strstr(needs, "calibration:"),
               "cal junk: %d errors, needs '%s'", rep->n_errors, needs);
         if (fails) dump(rep);
+        {
+            /* of the right size, magic and hash, but a byte changed after its
+             * CRC: the checker's whole check (ycol_cal_load()) finds it */
+            static unsigned char bad[sizeof(ycol_cal)];
+            char bad_sha[65];
+            memcpy(bad, cal_bytes, (size_t)cal_n);
+            bad[cal_n / 2] ^= 0x40;
+            sha_hex(bad, (size_t)cal_n, bad_sha);
+            write_in(rigdir, "display.yspcal", bad, (size_t)cal_n);
+            display_with(display, sizeof display, bad_sha);
+            write_profile("junk", "", display, VIEW, NULL);
+            rep = c_check(&k, "junk");
+            needs_of(rep, needs, sizeof needs);
+            CHECK(count_issues(rep, DSG_FROM_RIG, DSG_SEV_ERROR, "CRC", &rig) == 1 && rig && strstr(needs, "calibration:"),
+                  "cal crc: %d errors, needs '%s'", rep->n_errors, needs);
+            if (fails) dump(rep);
+        }
         write_in(rigdir, "display.yspcal", cal_bytes, (size_t)cal_n);
         remove_in(rigdir, "junk.json");
         c_close(&k);
