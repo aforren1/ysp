@@ -901,7 +901,7 @@ int ypt_cache_trim(const char* dir, int64_t max_bytes, int64_t* kept, char* err,
                 fl = g;
                 cf = nc;
             }
-            snprintf(fl[nf].name, sizeof fl[nf].name, "%s", name);
+            snprintf(fl[nf].name, sizeof fl[nf].name, "%.95s", name);
             fl[nf].size = (int64_t)(((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow);
             fl[nf].mtime = (int64_t)((t - 116444736000000000ull) / 10000000ull);   /* 1601 to 1970, in 100 ns */
             if (k == 2) {
@@ -940,7 +940,7 @@ int ypt_cache_trim(const char* dir, int64_t max_bytes, int64_t* kept, char* err,
                 fl = g;
                 cf = nc;
             }
-            snprintf(fl[nf].name, sizeof fl[nf].name, "%s", de->d_name);
+            snprintf(fl[nf].name, sizeof fl[nf].name, "%.95s", de->d_name);
             fl[nf].size = (int64_t)st.st_size;
             fl[nf].mtime = (int64_t)st.st_mtime;
             nf++;

@@ -1702,6 +1702,79 @@ of the new texture and programs. On llvmpipe a cold adoption takes 18 to
 - The UHD 770 ran the test, not the bench.
 - MSVC, clang and macOS were not compiled. The test is Linux only.
 
+### Decisions of step 6
+
+#### Part K as built (2026-11-22)
+
+Branch `step6-k`, from `designer-step6` (`55f27ea`). Part K is the pack
+tool 0.12.0 ([pack.md](pack.md), section 19): decisions 4 and 17. No
+designer file changed.
+
+**The API that parts B and V use.**
+
+```c
+ypt_options o;                       /* zero it first, as before         */
+o.cancel = build_canceled;           /* int fn(void* ctx): nonzero stops */
+o.cancel_ctx = builder;              /* read an atomic flag in fn        */
+o.cache = ".../PROJECT/.designer/cache/entries";   /* made when missing */
+o.cache_max = 2LL << 30;             /* part B's knob; 0: no bound       */
+rc = ypt_build(desc, out, &o, err, sizeof err);    /* YPT_ERR_CANCELED  */
+```
+
+- The check pack and Build pass the same folder; two builds at once, in
+  threads or processes, are safe (a temporary file and a rename; a
+  record that does not check out is a miss).
+- `ypt_cache_trim(dir, 0, NULL, err, cap)` empties the folder (a "Clear
+  the cache" command, if part V wants one).
+- With `o.log`, an entry from the cache ends its line with `(cache)`.
+
+**What the cache holds**: textures, converted or resampled audio, and
+each video with its index (a copied video: its index). The other kinds
+cost less than their source's hash or depend on other entries. The key
+is the source's SHA-256, the resource as written, the project's audio,
+the tool's and libraries' versions, and for ffmpeg its whole `-version`
+text and the command.
+
+**Measured** (pack.md 19 has the conditions and the tables): the 10 s 1080p video case builds in
+3.48 s without a cache, 3.50 s with a cold one (the 27.1 MB record
+written) and 0.236 s with a warm one (i5-14500, CPUs 2 and 4, load 0.25
+before, median of 20). On the repository's projects the cache changes
+nothing measurable (0.09 to 6.3 ms either way): only oddball has keyed
+entries, two small textures.
+
+**Decided by measurement: hash the source every build.** The manifest
+needs each source's SHA-256, so the build hashes every source anyway; a
+size-and-time check could only save that hash by writing a remembered
+one into the manifest, and a source changed within one time step at the
+same size would then give a wrong pack.
+
+**Where the plan was wrong or short.**
+- "No cancel gives the same bytes as 0.11.0" cannot hold for the
+  manifest: it records the tool's version, so every 0.12.0 pack has
+  another manifest and pack ID. Every other entry is byte-identical (the
+  corpus pin is unchanged); the test is that pin.
+- Decision 4 reads the cancel "before an ffmpeg step". That read is the
+  one before the step's resource; no test could tell them apart, so the
+  tool reads before each entry, before the glyph runs' derivation, and
+  after an ffmpeg step. A video's index (it decodes every frame) cannot
+  be canceled either: seconds for a copied 1080p MPEG-1 file.
+- Decision 17's key ("the source's bytes, the derivation's options and
+  the tool's version") is short: the libraries' versions, the project's
+  audio and, for video, ffmpeg's whole `-version` text are inputs too.
+- A warm cache does not make the check pack of a media project cheap:
+  a hit on the video case still costs 236 ms (the source's
+SHA-256 87 ms, `ffmpeg -version` 33 ms, the entry's hashes and the
+pack's write), at each check pack build. Part B may want to skip the check pack's build when no
+  source and no resource changed, or build it without the media.
+
+**Tests**: `test_pack_tool` 473 checks (63 new), Release, ASan with
+UBSan, and ThreadSanitizer; the fuzz target `cache_fuzz` (ctest
+`cache_fuzz_short`); 37 of 37 hand mutants killed (pack.md 19).
+
+**Open.** Windows and macOS not compiled or run here (CI); the hit could
+skip the entry's SHA-256 by storing it in the record (pack.md 19,
+"Left").
+
 ## First version
 
 In:

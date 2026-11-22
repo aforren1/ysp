@@ -208,7 +208,7 @@ static int find_record(const char* dir, char* out, size_t cap) {
     h = FindFirstFileA(pat, &fd);
     if (h == INVALID_HANDLE_VALUE) return 0;
     do {
-        if (strlen(fd.cFileName) == 70) { snprintf(out, cap, "%s/%s", dir, fd.cFileName); found++; }
+        if (strlen(fd.cFileName) == 70) { snprintf(out, cap, "%.150s/%.80s", dir, fd.cFileName); found++; }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #else
@@ -216,7 +216,7 @@ static int find_record(const char* dir, char* out, size_t cap) {
     struct dirent* de;
     if (!dd) return 0;
     while ((de = readdir(dd)) != NULL)
-        if (strlen(de->d_name) == 70 && !strcmp(de->d_name + 64, ".yspce")) { snprintf(out, cap, "%s/%s", dir, de->d_name); found++; }
+        if (strlen(de->d_name) == 70 && !strcmp(de->d_name + 64, ".yspce")) { snprintf(out, cap, "%.150s/%.80s", dir, de->d_name); found++; }
     closedir(dd);
 #endif
     return found;

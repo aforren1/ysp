@@ -1143,7 +1143,7 @@ static int list_dir(const char* dir, const char* suffix, char (*names)[96], int 
         size_t l = strlen(fd.cFileName);
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (l < sl || strcmp(fd.cFileName + l - sl, suffix) || l >= 96 || n >= max) continue;
-        snprintf(names[n++], 96, "%s", fd.cFileName);
+        snprintf(names[n++], 96, "%.95s", fd.cFileName);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #else
@@ -1153,7 +1153,7 @@ static int list_dir(const char* dir, const char* suffix, char (*names)[96], int 
     while ((de = readdir(dd)) != NULL) {
         size_t l = strlen(de->d_name);
         if (de->d_name[0] == '.' || l < sl || strcmp(de->d_name + l - sl, suffix) || l >= 96 || n >= max) continue;
-        snprintf(names[n++], 96, "%s", de->d_name);
+        snprintf(names[n++], 96, "%.95s", de->d_name);
     }
     closedir(dd);
 #endif
