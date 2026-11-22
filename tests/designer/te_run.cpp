@@ -364,6 +364,12 @@ void test_sim_end(ImGuiTestContext* ctx) {
     rvd_run_progress(3, "left", "correct", 0.412, "trial 3");
     ctx->Yield();
 #else
+    // the run's own --sim: the view says simulated (the script sleeps 300 ms
+    // before its end)
+    IM_CHECK(run_info().command && strstr(run_info().command, " --sim") != nullptr);
+    // "Starting" or "Running": R's state is STARTING until trials.csv opens.
+    // Not the status line's "Running (simulated):".
+    IM_CHECK(has_text(ctx, " (simulated), "));
     IM_CHECK(wait_for(ctx, 10.0, [] { return run_info().trials >= 3; }));
 #endif
     const char* t = frame_text(ctx);
@@ -457,6 +463,11 @@ void test_kill(ImGuiTestContext* ctx) {
     ctx->ItemClick(run_item(ctx, "Kill"));
     IM_CHECK(wait_end(ctx, 120));
     IM_CHECK_LT(run_info().exit_status, 0);
+    const char* t2 = frame_text(ctx);
+    IM_CHECK(strstr(t2, "Ended by signal 9") != nullptr);
+    IM_CHECK(strstr(t2, "did not close its data set") != nullptr);
+    // a simulated run has no display to put back
+    IM_CHECK(!ctx->ItemExists(run_item(ctx, "##restore")));
 #endif
 }
 
