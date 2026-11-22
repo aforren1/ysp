@@ -19,7 +19,6 @@
 #define _DEFAULT_SOURCE 1   /* struct stat's st_mtim and realpath() under -std=c11 */
 #endif
 #include "dsg.h"
-#include "csv.h"
 #include "ysp/json.h"
 #include "ysp/pack.h"
 #include "ysp/pack_tool.h"
@@ -45,22 +44,25 @@
 #define DSG_BUILD_NO_THREADS 1
 #endif
 
-/* The entry cache's bound (ypt_options.cache_max), decision 17's knob. The
- * cache must hold the records of the pack it builds, or each build misses:
- * with least-recently-used trimming and a working set larger than the
- * bound, every build derives its media again (a 10 s 1080p video: 3.5 s in
- * place of a 0.24 s hit). The working set is about the pack's media, so the
- * bound is twice the pack's size (a changed source's old record sits beside
- * the new one until a trim), and never below a floor that keeps the records
- * of earlier versions (an option tried and undone) for a while.
- * docs/designer.md, "Part B as built", has the measurements. */
+/* The entry cache's bound, decision 17's knob. The cache must hold the
+ * records of the pack it builds, or each build misses: with least recently
+ * used trimming and a working set larger than the bound, every build
+ * derives its media again (a 10 s 1080p video: 3.5 s in place of a 0.24 s
+ * hit). The working set is about the pack's media, so the bound is twice
+ * the pack's size (a changed source's old record sits beside the new one
+ * until a trim), and never below a floor that keeps the records of earlier
+ * versions (an option tried and undone) for a while. The trim runs after
+ * the build, with the size of the pack it made: the tool's own trim
+ * (ypt_options.cache_max) runs before the pack exists, so a first build
+ * with more new media than the last pack's bound would remove its own
+ * records, and the next build would derive them again. docs/designer.md,
+ * "Part B as built", has the measurements. */
 #define DSG_BUILD_CACHE_FLOOR ((int64_t)1 << 30)
 
 /* --- files: a stamp and an absolute path ----------------------------------- */
 
 typedef struct fstamp {
     int64_t size, mtime_ns;
-    bool    dir;
 } fstamp;
 
 #if defined(_WIN32)
@@ -78,8 +80,10 @@ static wchar_t* widen(const char* s) {
 static bool file_stamp(const char* path, fstamp* out) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     wchar_t* w = widen(path);
-    BOOL ok = w ? GetFileAttributesExW(w, GetFileExInfoStandard, &a) : FALSE;
+    BOOL ok;
     uint64_t t;
+    memset(&a, 0, sizeof a);
+    ok = w ? GetFileAttributesExW(w, GetFileExInfoStandard, &a) : FALSE;
     free(w);
     memset(out, 0, sizeof *out);
     out->size = -1;
@@ -88,7 +92,6 @@ static bool file_stamp(const char* path, fstamp* out) {
     t = ((uint64_t)a.ftLastWriteTime.dwHighDateTime << 32) | a.ftLastWriteTime.dwLowDateTime;
     /* 100 ns from 1601 to ns from 1970 */
     out->mtime_ns = ((int64_t)t - 116444736000000000LL) * 100;
-    out->dir = (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     return true;
 }
 
@@ -116,7 +119,6 @@ static bool file_stamp(const char* path, fstamp* out) {
 #else
     out->mtime_ns = (int64_t)st.st_mtim.tv_sec * 1000000000LL + (int64_t)st.st_mtim.tv_nsec;
 #endif
-    out->dir = S_ISDIR(st.st_mode) != 0;
     return true;
 }
 
@@ -266,14 +268,14 @@ static void out_free(build_out* o) {
 /* --- the issues: the pack tool's lines, with their places ------------------- */
 
 /* The definition's place that a message gives as "line N, column M", as
- * the check's place_in_message() (check.c) reads it. A table's place stays
- * in the message, where the tables view reads it (dsg_csv_place()); the
- * source description's lines and the manifest's are not the definition's. */
+ * the check's place_in_message() (check.c) reads it; the source
+ * description's lines and the manifest's are not the definition's. A
+ * table's place ("line L, row R, column 'NAME' (C)") stays in the message,
+ * where the tables view reads it (dsg_csv_place()). */
 static void message_place(const char* msg, const char* def, size_t n, dsg_place* out) {
     const char* s = msg;
     unsigned l = 0, col = 0;
     memset(out, 0, sizeof *out);
-    if (dsg_csv_place(msg, NULL, 0, NULL, NULL, NULL, 0)) return;
     if (strncmp(msg, "the source description", 22) == 0 || strncmp(msg, "the manifest", 12) == 0) return;
     while ((s = strstr(s, "line ")) != NULL && sscanf(s, "line %u, column %u", &l, &col) != 2) s += 5;
     if (s && l > 0) {
@@ -386,7 +388,7 @@ static int stamp_one(void* ctx, const char* rel) {
     build_out* o = s->o;
     const size_t k = (size_t)(unsigned)o->pub.n_sources;
     char path[DSG_PATH_MAX];
-    fstamp st;
+    fstamp st = { 0, 0 };
     if (dsg_join(path, sizeof path, s->base, rel)) return 0;   /* too long: the build says so */
     if (grow((void**)&o->src, &o->c_src, k + 1, sizeof *o->src) || grow((void**)&o->src_off, &o->c_src_off, k + 1, sizeof *o->src_off))
         return -1;
@@ -468,11 +470,22 @@ static int job_canceled(void* ctx) {
 }
 
 static int64_t cache_bound(const char* pack_path) {
-    fstamp st;
+    fstamp st = { 0, 0 };
     int64_t twice;
     if (!file_stamp(pack_path, &st) || st.size <= 0) return DSG_BUILD_CACHE_FLOOR;
     twice = st.size > INT64_MAX / 2 ? INT64_MAX : 2 * st.size;
     return twice > DSG_BUILD_CACHE_FLOOR ? twice : DSG_BUILD_CACHE_FLOOR;
+}
+
+/* After each build, the least recently used records go down to the bound
+ * of the pack at pack_path (the new one; after a failed build, the one
+ * before it). A trim lists the folder: about 0.9 us a record (82 us for
+ * 100), beside a build that hashes every source. Whether this build wrote a
+ * record cannot be told cheaply: the folder's time moves in steps of 1 to
+ * 4 ms here, and a build of a small project takes less. */
+static void cache_trim_after(const char* cache, const char* pack_path) {
+    char err[256];
+    (void)ypt_cache_trim(cache, cache_bound(pack_path), NULL, err, sizeof err);
 }
 
 /* The tool's warnings: C's tmpfile(), else a file in the project's DSG_DIR
@@ -529,8 +542,8 @@ static void run_build(build_job* j, build_out* o) {
     opt.cancel = job_canceled;
     opt.cancel_ctx = j;
     opt.cache = cache;
-    opt.cache_max = cache_bound(j->out_path);
     rc = ypt_build(j->desc_path, j->out_path, &opt, err, sizeof err);
+    cache_trim_after(cache, j->out_path);
     add_warnings(&x, wf);
     if (wf) fclose(wf);
     if (wpath[0]) remove(wpath);
@@ -542,7 +555,8 @@ static void run_build(build_job* j, build_out* o) {
     } else {
         ypak_pack pk;
         ypak_desc d;
-        fstamp st;
+        fstamp st = { 0, 0 };
+        memset(&pk, 0, sizeof pk);
         memset(&d, 0, sizeof d);
         d.path = j->out_path;
         d.verify = YPAK_VERIFY_OPEN;
@@ -760,7 +774,7 @@ int dsg_build_wait(dsg_builder* b, int64_t timeout_ns) {
 
 bool dsg_build_stale(const dsg_project* p, const dsg_build_result* r, uint64_t revision) {
     char want[DSG_PATH_MAX];
-    fstamp st;
+    fstamp st = { 0, 0 };
     int i;
     if (!r || r->status != DSG_BUILD_OK || r->revision != revision || !r->path) return true;
     /* a result of another project, or of another path */
@@ -788,7 +802,7 @@ bool dsg_build_stale(const dsg_project* p, const dsg_build_result* r, uint64_t r
  * files). The definition's bytes are in the key, so a pack kept never has
  * another text's glyph runs. The key and the pack's own size and time go
  * to OUT.key after a build; a pack that another build replaced, or one
- * deleted, is built again. A source that is a folder is never skipped.
+ * deleted, is built again.
  *
  * A size and a time can miss a change: a file written again within one
  * step of the file system's clock, at the same size, keeps its time. So, as
@@ -807,7 +821,7 @@ typedef struct skip_ctx {
 static int skip_one(void* ctx, const char* rel) {
     skip_ctx* s = (skip_ctx*)ctx;
     char path[DSG_PATH_MAX];
-    fstamp st;
+    fstamp st = { 0, 0 };
     int64_t v[2];
     ypak_sha256_update(&s->h, rel, strlen(rel) + 1);
     if (dsg_join(path, sizeof path, s->folder, rel)) return -1;
@@ -822,7 +836,7 @@ static int skip_one(void* ctx, const char* rel) {
         ypak_sha256_update(&s->h, sum, sizeof sum);
         return 0;
     }
-    if (file_stamp(path, &st) && st.dir) return -1;
+    file_stamp(path, &st);
     v[0] = st.size;
     v[1] = st.size < 0 ? 0 : st.mtime_ns;
     if (st.size >= 0 && st.mtime_ns > s->newest) s->newest = st.mtime_ns;
@@ -862,12 +876,12 @@ static void skip_line(const uint8_t key[32], const fstamp* st, char* out, size_t
 
 int dsg_build_check_pack(const dsg_project* p, const char* desc, size_t desc_len, const char* out_path, char* err, size_t cap) {
     char cache[DSG_PATH_MAX], key_path[DSG_PATH_MAX], line[160];
-    uint8_t key[32];
+    uint8_t key[32] = { 0 };
     int64_t newest = INT64_MIN;
     bool have_key;
     ypt_options o;
-    fstamp st;
-    int k;
+    fstamp st = { 0, 0 };
+    int k, rc;
     k = snprintf(key_path, sizeof key_path, "%s.key", out_path);
     if (dsg_join(cache, sizeof cache, p->folder, DSG_CACHE_DIR) || k < 0 || (size_t)k >= sizeof key_path) {
         snprintf(err, cap, "the project's path is too long");
@@ -887,8 +901,9 @@ int dsg_build_check_pack(const dsg_project* p, const char* desc, size_t desc_len
     }
     memset(&o, 0, sizeof o);
     o.cache = cache;
-    o.cache_max = cache_bound(out_path);
-    if (ypt_build_text(desc, desc_len, p->folder, out_path, &o, err, cap) != 0) return -1;
+    rc = ypt_build_text(desc, desc_len, p->folder, out_path, &o, err, cap);
+    cache_trim_after(cache, out_path);
+    if (rc != 0) return -1;
     if (have_key && file_stamp(out_path, &st) && (newest == INT64_MIN || newest < st.mtime_ns - DSG_BUILD_RACY_NS)) {
         char e2[256];
         skip_line(key, &st, line, sizeof line);

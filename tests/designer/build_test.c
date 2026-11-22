@@ -186,6 +186,7 @@ static int edit_file(const char* dir, const char* name, const char* from, const 
 static void pack_id_of(const char* path, char id[72]) {
     ypak_pack pk;
     ypak_desc d;
+    memset(&pk, 0, sizeof pk);
     memset(&d, 0, sizeof d);
     d.path = path;
     id[0] = 0;
@@ -200,6 +201,8 @@ static char* pack_entry(const char* path, const char* name, size_t* n) {
     ypak_desc d;
     ypak_entry e;
     char* out = NULL;
+    memset(&pk, 0, sizeof pk);
+    memset(&e, 0, sizeof e);
     memset(&d, 0, sizeof d);
     d.path = path;
     *n = 0;
@@ -300,6 +303,7 @@ static void test_pack_ids(dsg_builder* b) {
         const dsg_build_result* r;
         int s, n_res = 0;
         bool abs_ok = true, sized = true;
+        memset(&p, 0, sizeof p);
         if (strcmp(names[i], "stroop") == 0 && !dsg_is_file(YSP_DESIGNER_TEST_FONT)) {
             printf("  stroop skipped: no font at '%s'\n", YSP_DESIGNER_TEST_FONT);
             continue;
@@ -342,7 +346,56 @@ static void test_pack_ids(dsg_builder* b) {
         CHECK(r->n_sources > 1 && strstr(r->sources[0].path, "pack.json") && strstr(r->sources[1].path, p.def_source),
               "%s: the description first, then the definition", names[i]);
         CHECK(r->ms > 0 && r->done_unix_s > 1700000000, "%s: the time %.2f ms and the end", names[i], r->ms);
-        CHECK(!dsg_build_stale(&p, r, 7), "%s: up to date just after", names[i]);
+        if (strcmp(names[i], "oddball") == 0) {
+            /* its two textures went into the project's entry cache */
+            char cache[DSG_PATH_MAX], e2[256];
+            int64_t kept = -1;
+            dsg_join(cache, sizeof cache, dir, DSG_CACHE_DIR);
+            CHECK(ypt_cache_trim(cache, INT64_MAX, &kept, e2, sizeof e2) == 0 && kept > 0, "oddball: the Build's records are in %s (%lld bytes)",
+                  DSG_CACHE_DIR, (long long)kept);
+#if defined(__linux__)
+            {
+                /* The bound: an old record of 1.5 GiB (sparse), past the
+                 * 1 GiB floor, goes at the next Build that writes a record;
+                 * the Build's own stay. */
+                char fake[DSG_PATH_MAX], png[DSG_PATH_MAX];
+                FILE* f;
+                int64_t kept2 = -1;
+                dsg_join(fake, sizeof fake, cache, "0000000000000000000000000000000000000000000000000000000000000000.yspce");
+                f = fopen(fake, "wb");
+                if (f) {
+                    fseeko(f, (off_t)3 << 29, SEEK_SET);
+                    fputc(0, f);
+                    fclose(f);
+                }
+                set_mtime_s(fake, (int64_t)time(NULL) - 100000);
+                /* another texture: a record is written */
+                dsg_join(png, sizeof png, dir, "standard.png");
+                {
+                    char* d = NULL;
+                    size_t n = 0;
+                    char t2[DSG_PATH_MAX];
+                    dsg_join(t2, sizeof t2, dir, "target.png");
+                    if (read_all(t2, &d, &n) == 0) {
+                        write_all(png, d, n);
+                        free(d);
+                    }
+                }
+                r = build_now(b, &p, 8);
+                CHECK(r && r->status == DSG_BUILD_OK && !exists(fake), "oddball: an old record past the bound went");
+                CHECK(ypt_cache_trim(cache, INT64_MAX, &kept2, e2, sizeof e2) == 0 && kept2 > 0 && kept2 < ((int64_t)1 << 30),
+                      "oddball: the Build's records stay (%lld bytes)", (long long)kept2);
+            }
+#endif
+        }
+        if (strcmp(names[i], "rdk") == 0) {
+            /* a folder named "." has its real name */
+            dsg_project q = p;
+            char got[DSG_PATH_MAX];
+            if (snprintf(q.folder, sizeof q.folder, "%s/.", dir) >= (int)sizeof q.folder) q.folder[0] = 0;
+            CHECK(dsg_build_path(&q, got, sizeof got) == 0 && strstr(got, "/./build/ids_rdk.ysppak") != NULL, "a folder '.': %s", got);
+        }
+        CHECK(r && !dsg_build_stale(&p, r, r->revision), "%s: up to date just after", names[i]);
         dsg_project_close(&p);
     }
 }
@@ -354,6 +407,7 @@ static void test_issues(dsg_builder* b) {
     dsg_project p;
     const dsg_build_result* r;
     int i;
+    memset(&p, 0, sizeof p);
     printf("2. a table's bad cell\n");
     if (project("rdk", "bad_cell", &p, dir, sizeof dir) == 0) {
         /* a row with one field too many: ysp/table.h names its line and row */
@@ -434,9 +488,28 @@ static void test_issues(dsg_builder* b) {
 
 /* --- 4. builds the files -------------------------------------------------------------- */
 
+/* A description that does not parse: its line and column are not the
+ * definition's. */
+static void test_bad_desc(dsg_builder* b) {
+    char dir[DSG_PATH_MAX];
+    dsg_project p;
+    const dsg_build_result* r;
+    memset(&p, 0, sizeof p);
+    if (project("rdk", "bad_desc", &p, dir, sizeof dir)) { CHECK(0, "copy rdk"); return; }
+    if (edit_file(dir, "pack.json", "\"resources\": [", "\"resources\": [,")) CHECK(0, "edit the description");
+    r = build_now(b, &p, 6);
+    print_issues(r);
+    CHECK(r && r->status == DSG_BUILD_FAILED && r->report.n_errors == 1 && strstr(r->report.issues[0].message, "line ") &&
+              r->report.issues[0].place.line == 0,
+          "the description's error has no place in the definition");
+    CHECK(r && r->n_sources == 1 && strstr(r->sources[0].path, "pack.json"), "the stamp: the description alone (%d)", r ? r->n_sources : -1);
+    dsg_project_close(&p);
+}
+
 static void test_saved(dsg_builder* b) {
     char dir[DSG_PATH_MAX], err[512];
     dsg_project p;
+    memset(&p, 0, sizeof p);
     dsg_saved sv;
     const dsg_build_result* r;
     char* text;
@@ -473,6 +546,7 @@ static void test_saved(dsg_builder* b) {
 static void test_newest(void) {
     char dir[DSG_PATH_MAX], out[DSG_PATH_MAX], err[512];
     dsg_project p;
+    memset(&p, 0, sizeof p);
     dsg_builder_desc bd;
     dsg_builder* b;
     const dsg_build_result* r = NULL;
@@ -545,6 +619,7 @@ static void test_cancel_running(void) {
     static uint8_t raw[64 * 48 * 3];
     const char* old_path = getenv("PATH");
     dsg_project p;
+    memset(&p, 0, sizeof p);
     dsg_builder* b;
     const dsg_build_result* r = NULL;
     int i;
@@ -597,6 +672,7 @@ static void test_stale(dsg_builder* b) {
     const dsg_build_result* r;
     char* d = NULL;
     size_t n = 0;
+    memset(&p, 0, sizeof p);
     printf("7. stale\n");
     if (project("rdk", "stale", &p, dir, sizeof dir)) { CHECK(0, "copy rdk"); return; }
     CHECK(dsg_build_stale(&p, NULL, 1), "no result: stale");
@@ -641,6 +717,7 @@ static int64_t file_id(const char* path) {
     HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
     BOOL ok;
     if (h == INVALID_HANDLE_VALUE) return -1;
+    memset(&fi, 0, sizeof fi);
     ok = GetFileInformationByHandle(h, &fi);
     CloseHandle(h);
     return ok ? (int64_t)(((uint64_t)fi.nFileIndexHigh << 32) | fi.nFileIndexLow) : -1;
@@ -672,6 +749,8 @@ static char* check_desc(const dsg_project* p, size_t* n) {
 /* A check pack of text: the designer's call, then a fresh build of the same
  * inputs with no cache and no skip, which it must equal. *rebuilt: the pack
  * file changed. */
+/* A description in place of check_desc()'s, for one call; NULL: none. */
+static const char* g_desc_over;
 static bool check_pack_is_fresh(const dsg_project* p, const char* text, size_t tn, bool* rebuilt) {
     char src[DSG_PATH_MAX], pack[DSG_PATH_MAX], fresh[DSG_PATH_MAX], err[1024];
     char* desc;
@@ -689,8 +768,17 @@ static bool check_pack_is_fresh(const dsg_project* p, const char* text, size_t t
     dsg_join(fresh, sizeof fresh, p->folder, DSG_DIR "/check");
     dsg_make_dir(fresh, err, sizeof err);
     dsg_join(fresh, sizeof fresh, p->folder, DSG_DIR "/fresh.ysppak");
-    write_all(src, text, tn);
-    desc = check_desc(p, &dn);
+    /* as check.c writes it before each build, its time says nothing: the
+     * same time for every text */
+    write_now(src, text, tn);
+    set_mtime_s(src, 1000000000);
+    if (g_desc_over) {
+        dn = strlen(g_desc_over);
+        desc = (char*)malloc(dn + 1);
+        memcpy(desc, g_desc_over, dn + 1);
+    } else {
+        desc = check_desc(p, &dn);
+    }
     t0 = file_id(pack);
     if (!desc || dsg_build_check_pack(p, desc, dn, pack, err, sizeof err) != 0) {
         printf("  check pack: %s\n", err);
@@ -717,6 +805,7 @@ static void test_check_pack(void) {
     char dir[DSG_PATH_MAX], path[DSG_PATH_MAX], err[1024];
     dsg_project p;
     bool rebuilt = false;
+    memset(&p, 0, sizeof p);
     printf("8. the check pack: the entry cache and the skip\n");
     if (project("oddball", "cp_oddball", &p, dir, sizeof dir) == 0) {
         size_t dn = 0;
@@ -754,6 +843,25 @@ static void test_check_pack(void) {
         CHECK(check_pack_is_fresh(&p, other, p.text_len, &rebuilt) && rebuilt, "another text: built, fresh");
         CHECK(check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && rebuilt, "the first text again: built, fresh");
         CHECK(check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && !rebuilt, "again: skipped");
+        {
+            /* another description, the same sources: an option of the table that
+             * its derivation records */
+            size_t dn = 0;
+            char* d0 = check_desc(&p, &dn);
+            char* d1 = (char*)malloc(dn + 64);
+            const char* at2 = d0 ? strstr(d0, "\"kind\": \"table\"") : NULL;
+            if (at2) {
+                memcpy(d1, d0, (size_t)(at2 - d0));
+                strcpy(d1 + (at2 - d0), "\"allow_empty\": true, ");
+                strcat(d1, at2);
+                g_desc_over = d1;
+            }
+            CHECK(at2 && check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && rebuilt, "another description: built, fresh");
+            g_desc_over = NULL;
+            CHECK(check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && rebuilt, "the first again: built, fresh");
+            free(d0);
+            free(d1);
+        }
         dsg_join(path, sizeof path, dir, "conditions.csv");
         yrt_sleep_ns(30000000);
         copy_file(path, path);
@@ -768,13 +876,36 @@ static void test_check_pack(void) {
             char* d = NULL;
             size_t n = 0;
             if (read_all(path, &d, &n) == 0) {
-                d[n / 2] ^= 1;
+                d[n / 2] = (char)(d[n / 2] ^ 1);
                 yrt_sleep_ns(30000000);
                 write_all(path, d, n);
                 free(d);
             }
         }
         CHECK(check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && rebuilt, "another pack in its place: built, fresh");
+#if !defined(_WIN32)
+        {
+            /* another size at the same time */
+            char* d = NULL;
+            size_t n = 0;
+            struct stat st;
+            struct timespec t[2];
+            dsg_join(path, sizeof path, dir, DSG_CHECK_PACK);
+            stat(path, &st);
+#if defined(__APPLE__)
+            t[0] = st.st_mtimespec;
+#else
+            t[0] = st.st_mtim;
+#endif
+            t[1] = t[0];
+            if (read_all(path, &d, &n) == 0) {
+                write_now(path, d, n - 1);
+                free(d);
+            }
+            utimensat(AT_FDCWD, path, t, 0);
+        }
+        CHECK(check_pack_is_fresh(&p, p.text, p.text_len, &rebuilt) && rebuilt, "a pack of another size at its time: built, fresh");
+#endif
         free(other);
         dsg_project_close(&p);
     } else {
@@ -845,6 +976,7 @@ static void test_check_pack(void) {
         dsg_checker* c = dsg_checker_new();
         dsg_report r;
         int64_t t0;
+        memset(&r, 0, sizeof r);
         dsg_join(path, sizeof path, dir, DSG_CHECK_PACK);
         CHECK(c && dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.built && r.n_errors == 0, "the first check builds");
         t0 = file_id(path);
@@ -865,6 +997,7 @@ static void test_two_at_once(void) {
     const char* proj = dsg_is_file(YSP_DESIGNER_TEST_FONT) ? "stroop" : "oddball";
     char dir[DSG_PATH_MAX], out[DSG_PATH_MAX], other[DSG_PATH_MAX], err[1024], id[72];
     dsg_project p;
+    memset(&p, 0, sizeof p);
     dsg_builder* b;
     int k;
     printf("9. a Build and a check pack at once (%s)\n", proj);
@@ -912,6 +1045,7 @@ int main(int argc, char** argv) {
     if (b) {
         test_pack_ids(b);
         test_issues(b);
+        test_bad_desc(b);
         test_saved(b);
         test_stale(b);
         dsg_builder_stop(b);
