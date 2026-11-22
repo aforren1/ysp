@@ -285,6 +285,7 @@ static void part_list(void) {
     CHECK(n == 0, "list: an empty folder gives %d (%s)", n, err);
     if (write_profile("profile", "", NULL, VIEW, NULL) || write_profile("booth-2", "", NULL, NULL, NULL) || write_profile("a", "", NULL, NULL, NULL) ||
         write_profile("bad name", "", NULL, NULL, NULL) || write_profile("x.b", "", NULL, NULL, NULL) || write_in(rigdir, "notes.txt", "x\n", 2) ||
+        write_profile("z9", "", NULL, NULL, NULL) || write_profile("m", "", NULL, NULL, NULL) || write_profile("B", "", NULL, NULL, NULL) ||
         write_in(rigdir, "profile.json.tmp", "{}", 2)) {
         CHECK(0, "list: the files");
         return;
@@ -292,14 +293,19 @@ static void part_list(void) {
     snprintf(dirj, sizeof dirj, "%s/dir.json", rigdir);
     CHECK(mkdir_private(dirj) == 0, "list: a folder named dir.json");
     n = dsg_rig_list(names, 8, err, sizeof err);
-    CHECK(n == 3 && strcmp(names[0], "profile") == 0 && strcmp(names[1], "a") == 0 && strcmp(names[2], "booth-2") == 0,
-          "list: %d: %s %s %s", n, n > 0 ? names[0] : "", n > 1 ? names[1] : "", n > 2 ? names[2] : "");
+    /* profile first, then by bytes: capitals first */
+    CHECK(n == 6 && strcmp(names[0], "profile") == 0 && strcmp(names[1], "B") == 0 && strcmp(names[2], "a") == 0 && strcmp(names[3], "booth-2") == 0 &&
+              strcmp(names[4], "m") == 0 && strcmp(names[5], "z9") == 0,
+          "list: %d: %s %s %s %s", n, n > 0 ? names[0] : "", n > 1 ? names[1] : "", n > 2 ? names[2] : "", n > 3 ? names[3] : "");
     n = dsg_rig_list(names, 2, err, sizeof err);
-    CHECK(n == 2 && strcmp(names[0], "profile") == 0 && strcmp(names[1], "a") == 0, "list: cap 2 gives %d", n);
+    CHECK(n == 2 && strcmp(names[0], "profile") == 0 && strcmp(names[1], "B") == 0, "list: cap 2 gives %d", n);
     remove_in(rigdir, "profile.json");
     n = dsg_rig_list(names, 8, err, sizeof err);
-    CHECK(n == 2 && strcmp(names[0], "a") == 0 && strcmp(names[1], "booth-2") == 0, "list: with no profile.json %d: %s", n, n > 0 ? names[0] : "");
+    CHECK(n == 5 && strcmp(names[0], "B") == 0 && strcmp(names[1], "a") == 0, "list: with no profile.json %d: %s", n, n > 0 ? names[0] : "");
     remove_in(rigdir, "a.json");
+    remove_in(rigdir, "z9.json");
+    remove_in(rigdir, "m.json");
+    remove_in(rigdir, "B.json");
     remove_in(rigdir, "bad name.json");
     remove_in(rigdir, "x.b.json");
     remove_in(rigdir, "notes.txt");
@@ -474,10 +480,13 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
     display_with(display, sizeof display, cal_sha);
     if (write_profile("full", roles, display, VIEW, SIGNALS) || write_profile("room", "", display, VIEW, SIGNALS) ||
         write_profile("part", "\"resp\": {\"family\": \"xid\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL) ||
-        write_profile("wrong", "\"resp\": {\"family\": \"line\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL)) {
+        write_profile("wrong", "\"resp\": {\"family\": \"line\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL) ||
+        write_profile("profile", "\"resp\": {\"family\": \"line\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL)) {
         CHECK(0, "check: the profiles");
         return;
     }
+    /* "" is no profile, not profile.json (which refuses every project
+     * here): the Run view's "No profile" */
     {
         /* the player's case_rig, through the designer: each need the
          * profile meets is gone, the others stay */
@@ -530,6 +539,9 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
         memcpy(bad, k.proj.text, k.proj.text_len + 1);
         at = strstr(bad, key);
         if (at) memcpy(at, "\"timeLine\"", strlen(key));
+        /* the check pack first, so the bad text reaches pl_check() */
+        rep = c_check(&k, "wrong");
+        CHECK(rep->have_pack, "check: rdk's check pack");
         dsg_checker_set_rig(k.c, "wrong");
         memset(&k.r, 0, sizeof k.r);
         (void)dsg_check(k.c, &k.proj, bad, k.proj.text_len, NULL, &k.r);
@@ -544,6 +556,7 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
         free(bad);
         c_close(&k);
     }
+    remove_in(rigdir, "profile.json");
     /* a definition that needs nothing of the profile: the same issues */
     if (c_open(&k, rdk) == 0) {
         char a[4096] = "", b[4096] = "";
@@ -573,6 +586,12 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
         CHECK(strcmp(needs, "calibration: display_tier: field:participant") == 0 && rep->n_errors == 0 &&
                   count_issues(rep, DSG_FROM_RIG, DSG_SEV_NOTE, "has changed", &rig) == 1 && rig,
               "cal changed: needs '%s', %d errors", needs, rep->n_errors);
+        {
+            dsg_rig* rr = NULL;
+            char err[512];
+            CHECK(dsg_rig_load("room", &rr, err, sizeof err) == 0 && rr && !dsg_rig_cal(rr), "cal changed: dsg_rig_cal() gives it");
+            dsg_rig_free(rr);
+        }
         /* missing: a real start cannot read it */
         remove_in(rigdir, "display.yspcal");
         rep = c_check(&k, "room");
