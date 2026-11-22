@@ -2907,15 +2907,25 @@ int pl_run_finish(pl_player* p) {
     return p->failed ? -1 : 0;
 }
 
+volatile sig_atomic_t pl_stop_requested = 0;
+
 int pl_run(pl_player* p) {
     yscr_frame f;
     int rc = 0, i, r;
+    bool stop_asked = false;
     if (pl_run_prepare(p) < 0) return -1;
     if (!p->args.sim) {
         printf("ysp_player: running; Shift+Esc stops the session\n");
         fflush(stdout);
     }
     for (;;) {
+        /* SIGTERM (main.c): the screen's own request, so the stop takes the
+         * path of every other abort, with its ring record and time. Not in
+         * the handler: yscr_request_abort() is not async-signal-safe */
+        if (pl_stop_requested && !stop_asked) {
+            stop_asked = true;
+            yscr_request_abort();
+        }
         rc = yscr_begin(&p->scr, &f);
         if (rc == YSCR_QUIT) {
             /* the operator stopped it (ysp/screen.h, ABORT): the running

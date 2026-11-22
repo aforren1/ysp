@@ -131,9 +131,12 @@ static char* edit(const char* text, const char* from, const char* to, unsigned* 
     return out;
 }
 
+static const yrig_profile* check_rig;   /* pl_check_desc.rig of run_check() */
+
 static int run_check(const pk* k, const char* def, pl_check_result* r) {
     pl_check_desc d;
     memset(&d, 0, sizeof d);
+    d.rig = check_rig;
     d.pack.data = k->data;
     d.pack.size = k->size;
     d.def_text = def;
@@ -525,6 +528,228 @@ static void case_given_cal(void) {
     given_cal = 0;
 }
 
+/* --- 0.18.0: pl_check_desc.rig ------------------------------------------- */
+
+static char rig_dir[1024];   /* made before the cases' folders; removed at the end */
+
+static int write_bytes(const char* path, const void* data, size_t n) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return -1;
+    if (fwrite(data, 1, n, fp) != n) { fclose(fp); return -1; }
+    return fclose(fp) == 0 ? 0 : -1;
+}
+
+static void sha_hex(const void* data, size_t n, char hex[65]) {
+    static const char H[] = "0123456789abcdef";
+    uint8_t d[32];
+    int i;
+    yrig_sha256(data, n, d);
+    for (i = 0; i < 32; i++) { hex[i * 2] = H[d[i] >> 4]; hex[i * 2 + 1] = H[d[i] & 15]; }
+    hex[64] = 0;
+}
+
+static const char BOUNDS[] = "# a test fixture, not a measurement\nformat ysp-in-bounds 1\ndate 2026-11-22T00:00:00Z\nin_family xid\n"
+                             "n 200\nmissed 0\nlo_s -0.000100000\nmedian_s 0.000050000\nhi_s 0.000400000\n";
+static char bounds_sha[65], cal_sha[65];
+static char rig_path_bounds[1200], rig_path_cal[1200], rig_path_lb[1200];
+
+/* The rig folder of player_make_rig (its view and its nominal calibration),
+ * with a bounds loopback for an xid role, so that role is tier 1. */
+static int rig_files(void) {
+    static unsigned char bytes[sizeof(ycol_cal)];
+    int n = ycol_cal_save(&nominal, bytes, sizeof bytes);
+    if (n < 0) return -1;
+    snprintf(rig_path_cal, sizeof rig_path_cal, "%s/display.yspcal", rig_dir);
+    snprintf(rig_path_lb, sizeof rig_path_lb, "%s/loopback", rig_dir);
+    sha_hex(BOUNDS, strlen(BOUNDS), bounds_sha);
+    sha_hex(bytes, (size_t)n, cal_sha);
+    snprintf(rig_path_bounds, sizeof rig_path_bounds, "%s/loopback/%s.txt", rig_dir, bounds_sha);
+#if !defined(_WIN32)
+    if (mkdir(rig_path_lb, 0700) != 0) return -1;
+#else
+    if (_mkdir(rig_path_lb) != 0) return -1;
+#endif
+    if (write_bytes(rig_path_cal, bytes, (size_t)n) != 0 || write_bytes(rig_path_bounds, BOUNDS, strlen(BOUNDS)) != 0) return -1;
+    return 0;
+}
+
+static void rig_files_remove(void) {
+    remove(rig_path_bounds);
+    remove(rig_path_cal);
+#if !defined(_WIN32)
+    rmdir(rig_path_lb);
+    rmdir(rig_dir);
+#else
+    _rmdir(rig_path_lb);
+    _rmdir(rig_dir);
+#endif
+}
+
+/* A profile from its parts, checked against the rig folder's files. */
+static int rig_make(yrig_profile* out, const char* roles, const char* display, const char* view, const char* signals) {
+    char text[4096], err[300];
+    int rc;
+    snprintf(text, sizeof text, "{\"format\": \"ysp-rig 1\", \"rig\": \"check\", \"written\": \"2026-11-22T00:00:00Z\", \"roles\": {%s}%s%s%s%s%s%s}",
+             roles, display ? ", \"display\": " : "", display ? display : "", view ? ", \"view\": " : "", view ? view : "",
+             signals ? ", \"signals\": " : "", signals ? signals : "");
+    rc = yrig_parse(out, text, strlen(text), rig_dir, err, sizeof err);
+    if (rc != YRIG_OK) printf("  the profile: %s\n%s\n", err, text);
+    return rc;
+}
+
+/* status, errors, message and needs: what the designer shows of a check */
+static void check_text(const pl_check_result* r, char* buf, size_t cap) {
+    char needs[1024];
+    needs_text(r, needs, sizeof needs);
+    snprintf(buf, cap, "%d|%d|%d|%s|%s", r->status, r->report ? r->report->n_errors : -1, r->report ? r->report->n_warnings : -1,
+             r->message ? r->message : "", needs);
+}
+
+/* The first error diagnostic's text, or "". */
+static const char* first_error(const pl_check_result* r) {
+    int i;
+    for (i = 0; r->report && i < r->report->n_diags; i++)
+        if (r->report->diags[i].severity == YEXP_ERROR) return r->report->diags[i].msg;
+    return "";
+}
+
+static void case_rig(void) {
+    static yrig_profile full, room, part, wrong, changed, units;
+    static yrig_profile keep;
+    char roles[1024], display[256], signals[1024];
+    pl_check_result r;
+    char a[2048], b[2048];
+    size_t n, i;
+    memset(&r, 0, sizeof r);
+    if (rig_files() != 0) { CHECK(0, "the rig folder %s", rig_dir); return; }
+    snprintf(roles, sizeof roles,
+             "\"resp\": {\"family\": \"xid\", \"key\": \"port:/dev/null\", \"bounds\": {\"n\": 200, \"lo_s\": -0.0001, \"hi_s\": 0.0004, "
+             "\"date\": \"2026-11-22T00:00:00Z\", \"sha256\": \"%s\"}}, \"trig\": {\"family\": \"triggerbox\", \"key\": \"port:/dev/null\"}",
+             bounds_sha);
+    snprintf(display, sizeof display, "{\"onset_offset_s\": 0, \"calibration\": {\"file\": \"display.yspcal\", \"sha256\": \"%s\"}}", cal_sha);
+    snprintf(signals, sizeof signals,
+             "{\"hand\": {\"adapter\": \"raw_mouse\", \"units\": \"display_px\", \"per_count\": 1, \"device\": \"click\"}, "
+             "\"left\": {\"adapter\": \"raw_mouse\", \"units\": \"display_cm\", \"per_count\": 0.01, \"device\": \"click\"}, "
+             "\"right\": {\"adapter\": \"raw_mouse\", \"units\": \"display_cm\", \"per_count\": 0.01, \"device\": \"click\"}}");
+#define VIEW "{\"distance_mm\": 570, \"width_mm\": 518.4, \"width_px\": 1920}"
+    /* room: full's display, view and signals, no role: afc2, rdk, stroop and
+     * sound name a keyboard role 'resp', which full binds to an xid */
+    if (rig_make(&full, roles, display, VIEW, signals) != YRIG_OK || rig_make(&room, "", display, VIEW, signals) != YRIG_OK ||
+        rig_make(&part, "\"resp\": {\"family\": \"xid\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL) != YRIG_OK ||
+        rig_make(&wrong, "\"resp\": {\"family\": \"line\", \"key\": \"port:/dev/null\"}", NULL, NULL, NULL) != YRIG_OK ||
+        rig_make(&units, "", NULL, VIEW,
+                 "{\"left\": {\"adapter\": \"raw_mouse\", \"units\": \"workspace_cm\", \"per_count\": 0.01, \"device\": \"click\"}, "
+                 "\"right\": {\"adapter\": \"raw_mouse\", \"units\": \"display_cm\", \"per_count\": 0.01, \"device\": \"click\"}}") != YRIG_OK) {
+        CHECK(0, "the test profiles");
+        rig_files_remove();
+        return;
+    }
+#undef VIEW
+    CHECK(full.n_notes == 0 && full.display.check == YRIG_CHECK_OK && full.role[0].bounds.check == YRIG_CHECK_OK,
+          "the full profile's checks: %d notes, calibration %d, bounds %d", full.n_notes, full.display.check, full.role[0].bounds.check);
+    memcpy(&changed, &room, sizeof changed);
+    changed.display.check = YRIG_CHECK_CHANGED;   /* as yrig_load() gives for an edited calibration file */
+    memcpy(&keep, &part, sizeof keep);
+    given_cal = 1;
+    {
+        /* each need the profile meets is gone; the others stay */
+        static const struct { const char* pack; const yrig_profile* rig; int cal; const char* needs; } want[] = {
+            /* resp bound with a checked bounds loopback (tier 1), trig bound, the view */
+            { "oddball", &full, 1, "display_tier::1 field:participant:0" },
+            /* resp bound with no loopback (UNKNOWN), trig unbound, no view */
+            { "oddball", &part, 1, "device:trig:1 display_tier::1 field:participant:0 role_tier:resp:2 view::1" },
+            /* the profile's calibration, given; its view */
+            { "afc2", &room, 1, "display_tier::2 field:participant:0" },
+            /* the calibration not given: the check reads no file, so the need stays */
+            { "afc2", &room, 0, "calibration::0 display_tier::2 field:participant:0" },
+            /* its file failed the check: a real start's calibration is not the profile's */
+            { "afc2", &changed, 1, "calibration::0 display_tier::2 field:participant:0" },
+            /* the signals: hand in display_px; left and right in display_cm, through the view */
+            { "visuomotor", &full, 1, "field:participant:0" },
+            { "bimanual", &full, 1, "field:participant:0" },
+            /* no signals in the profile: the needs stay */
+            { "bimanual", &part, 1, "field:participant:0 signal:left:1 signal:right:1 sim_gain:left:0 sim_gain:right:0 view::2" },
+        };
+        for (i = 0; i < sizeof want / sizeof want[0]; i++) {
+            pk* k = pack_of(want[i].pack);
+            if (!k) { printf("  %s: no pack, skipped\n", want[i].pack); continue; }
+            check_rig = want[i].rig;
+            given_cal = want[i].cal;
+            (void)run_check(k, NULL, &r);
+            needs_text(&r, a, sizeof a);
+            CHECK(r.status == PL_CHECK_OK && strcmp(a, want[i].needs) == 0, "%s with profile %d: status %d '%s', needs '%s', want '%s'", want[i].pack, (int)i,
+                  r.status, r.message ? r.message : "", a, want[i].needs);
+            /* the loader's checks against a rig ran */
+            CHECK(r.report && !(r.report->skipped & (YEXP_CHECK_ROLES | YEXP_CHECK_SIGROLES)), "%s with profile %d: skipped 0x%x", want[i].pack, (int)i,
+                  r.report ? r.report->skipped : 0u);
+            {
+                /* a bound role's device never opens: the check opens nothing */
+                int j, devs = 0;
+                for (j = 0; P.roles && P.def && j < P.def->n_roles; j++) devs += P.roles[j].dev != NULL;
+                CHECK(!P.scr_open && !P.ds_open && !P.writer_open && !P.ring_open && devs == 0, "%s with profile %d: a screen, a data set, a writer, a ring or %d devices opened",
+                      want[i].pack, (int)i, devs);
+            }
+            if (want[i].cal && strcmp(want[i].pack, "afc2") == 0)
+                CHECK(P.have_cal && memcmp(&P.cal, &nominal, sizeof nominal) == 0, "%s with profile %d: the calibration is not the given one", want[i].pack, (int)i);
+            printf("  %s with profile %d: needs %s\n", want[i].pack, (int)i, a);
+            pl_close(&P);
+        }
+    }
+    /* the copy, not the caller's profile, takes the stand-in view */
+    CHECK(memcmp(&keep, &part, sizeof keep) == 0, "pl_check() wrote into pl_check_desc.rig");
+    {
+        /* a min_tier of 1: the loopback's tier 1 meets it too */
+        pk* k = pack_of("oddball");
+        char* def = k ? def_of(k, &n) : NULL;
+        char* e = def ? edit(def, "\"min_tier\": 2", "\"min_tier\": 1", NULL) : NULL;
+        check_rig = &full;
+        CHECK(e && run_check(k, e, &r) == PL_CHECK_OK, "oddball, min_tier 1: status %d: %s", r.status, r.message ? r.message : "");
+        needs_text(&r, a, sizeof a);
+        CHECK(strcmp(a, "display_tier::1 field:participant:0") == 0, "oddball, min_tier 1, with the profile: needs '%s'", a);
+        if (e) pl_close(&P);
+        free(e);
+        free(def);
+    }
+    {
+        /* the start's refusal: the rig binds resp to a family it does not list */
+        pk* k = pack_of("oddball");
+        check_rig = &wrong;
+        (void)run_check(k, NULL, &r);
+        CHECK(r.status == PL_CHECK_DEFINITION && strstr(first_error(&r), "'resp'") && strstr(first_error(&r), "the rig binds it to family 'line', which the role does not list"),
+              "oddball, resp bound to line: status %d: '%s' '%s'", r.status, first_error(&r), r.message ? r.message : "");
+        printf("  oddball, resp bound to line (%d): %s\n", r.status, first_error(&r));
+        pl_close(&P);
+        /* a signal's units that do not convert to the role's */
+        k = pack_of("bimanual");
+        check_rig = &units;
+        (void)run_check(k, NULL, &r);
+        CHECK(r.status == PL_CHECK_DEFINITION && strstr(first_error(&r), "'left'") && strstr(first_error(&r), "do not convert"),
+              "bimanual, left in workspace_cm: status %d: '%s' '%s'", r.status, first_error(&r), r.message ? r.message : "");
+        printf("  bimanual, left in workspace_cm (%d): %s\n", r.status, first_error(&r));
+        pl_close(&P);
+    }
+    {
+        /* a definition that needs nothing of the profile: the same result */
+        static const char* const names[] = { "rdk", "stroop", "sound" };
+        for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+            pk* k = pack_of(names[i]);
+            if (!k) continue;
+            check_rig = NULL;
+            (void)run_check(k, NULL, &r);
+            check_text(&r, a, sizeof a);
+            pl_close(&P);
+            check_rig = &room;
+            (void)run_check(k, NULL, &r);
+            check_text(&r, b, sizeof b);
+            pl_close(&P);
+            CHECK(strcmp(a, b) == 0, "%s: '%s' with no profile, '%s' with one", names[i], a, b);
+        }
+    }
+    check_rig = NULL;
+    given_cal = 0;
+    rig_files_remove();
+}
+
 /* Two calls give one answer (seeded), and a call leaves no clock behind:
  * the same answer on the virtual clock, and the real clock after. */
 static void case_repeat_and_clock(void) {
@@ -707,11 +932,12 @@ int main(int argc, char** argv) {
         /* the process id: the mutation runner runs several at once */
         snprintf(cwd_dir, sizeof cwd_dir, "%s/pl_check_cwd_%d_%d", base, (int)getpid(), (int)time(NULL));
         snprintf(tmp_dir, sizeof tmp_dir, "%s/pl_check_tmp_%d_%d", base, (int)getpid(), (int)time(NULL));
+        snprintf(rig_dir, sizeof rig_dir, "%s/pl_check_rig_%d_%d", base, (int)getpid(), (int)time(NULL));
 #if !defined(_WIN32)
-        if (!getcwd(old, sizeof old) || mkdir(cwd_dir, 0700) != 0 || mkdir(tmp_dir, 0700) != 0 || chdir(cwd_dir) != 0) { printf("no work folders under %s\n", base); return 2; }
+        if (!getcwd(old, sizeof old) || mkdir(cwd_dir, 0700) != 0 || mkdir(tmp_dir, 0700) != 0 || mkdir(rig_dir, 0700) != 0 || chdir(cwd_dir) != 0) { printf("no work folders under %s\n", base); return 2; }
         setenv("TMPDIR", tmp_dir, 1);
 #else
-        if (!_getcwd(old, sizeof old) || _mkdir(cwd_dir) != 0 || _mkdir(tmp_dir) != 0 || _chdir(cwd_dir) != 0) { printf("no work folders under %s\n", base); return 2; }
+        if (!_getcwd(old, sizeof old) || _mkdir(cwd_dir) != 0 || _mkdir(tmp_dir) != 0 || _mkdir(rig_dir) != 0 || _chdir(cwd_dir) != 0) { printf("no work folders under %s\n", base); return 2; }
         _putenv_s("TMP", tmp_dir);
         _putenv_s("TEMP", tmp_dir);
 #endif
@@ -724,6 +950,7 @@ int main(int argc, char** argv) {
         case_entries();
         case_repeat_and_clock();
         case_given_cal();
+        case_rig();
 #if defined(PL_CHECK_COUNT)
         /* every case's blocks, then 20 more rounds of the examples: the live
          * count must not grow */

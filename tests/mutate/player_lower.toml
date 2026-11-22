@@ -482,17 +482,17 @@ name = "a role's min_tier goes to stderr, not the needs"
 test = "check"
 why = "oddball's resp has min_tier 2: role_tier:resp:2, and pl_check() writes nothing."
 find = '''        if (p->stand_in) {
-            pl_need_add(p, PL_NEED_ROLE_TIER'''
+            /* pl_check() with a profile: a real start's tier'''
 replace = '''        if (false) {
-            pl_need_add(p, PL_NEED_ROLE_TIER'''
+            /* pl_check() with a profile: a real start's tier'''
 
 [[mutant]]
 id = "ck-10"
 name = "a keyboard role needs a device"
 test = "check"
 why = "A required input role that lists the keyboard takes it in a real run: rdk lists no device need."
-find = '''        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))'''
-replace = '''        if (p->stand_in && r->def->required)'''
+find = '''        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !(p->checking && r->rig))'''
+replace = '''        if (p->stand_in && r->def->required && !(p->checking && r->rig))'''
 
 [[mutant]]
 id = "ck-11"
@@ -700,9 +700,9 @@ test = "sim"
 env = { PL_SIM_CASES = "display" }
 why = "A session lists what a real run asks, as pl_check() (oddball's resp)."
 find = '''        if (p->stand_in) {
-            pl_need_add(p, PL_NEED_ROLE_TIER'''
+            /* pl_check() with a profile: a real start's tier'''
 replace = '''        if (p->checking) {
-            pl_need_add(p, PL_NEED_ROLE_TIER'''
+            /* pl_check() with a profile: a real start's tier'''
 
 [[mutant]]
 id = "ls-09"
@@ -724,3 +724,81 @@ find = '''    if (p->runs_open && !p->checking) {
         pl_gfx_warm(p);'''
 replace = '''    if (p->runs_open && !p->checking && !p->sim.on) {
         pl_gfx_warm(p);'''
+
+# --- p18-: 0.18.0, pl_check_desc.rig (tests/player/check_test.c, case_rig) --
+
+[[mutant]]
+id = "p18-01"
+name = "a role the profile binds still needs a device"
+test = "check"
+why = "0.18.0: the full profile binds oddball's trig: device:trig:1 is gone."
+find = ''' && !(p->checking && r->rig))
+            pl_need_add(p, PL_NEED_DEVICE'''
+replace = ''')
+            pl_need_add(p, PL_NEED_DEVICE'''
+
+[[mutant]]
+id = "p18-02"
+name = "a tier equal to min_tier does not meet it"
+test = "check"
+why = "0.18.0: oddball with resp's min_tier 1 and a checked bounds loopback (tier 1) needs no role tier."
+find = '''            if (tier != YIN_TIER_UNKNOWN && tier <= r->def->min_tier) continue;'''
+replace = '''            if (tier != YIN_TIER_UNKNOWN && tier < r->def->min_tier) continue;'''
+
+[[mutant]]
+id = "p18-03"
+name = "the check takes no tier from the profile"
+test = "check"
+why = "0.18.0: resp is tier 1 in the full profile (its bounds loopback): role_tier:resp:2 is gone."
+find = '''                tier = (int)yrig_source_role(p->rig, r->def->name, none).tier;'''
+replace = '''                (void)yrig_source_role(p->rig, r->def->name, none).tier;'''
+
+[[mutant]]
+id = "p18-04"
+name = "a calibration that failed its check meets the need"
+test = "check"
+why = "0.18.0: afc2 with a profile whose calibration file changed keeps calibration::0."
+find = ''' && p->rig->display.check == YRIG_CHECK_OK && p->check_cal;'''
+replace = ''' && p->check_cal;'''
+
+[[mutant]]
+id = "p18-05"
+name = "the profile's calibration meets the need with no calibration given"
+test = "check"
+why = "0.18.0: the check reads no file; afc2 with the profile and d.cal NULL keeps calibration::0."
+find = ''' && p->rig->display.check == YRIG_CHECK_OK && p->check_cal;'''
+replace = ''' && p->rig->display.check == YRIG_CHECK_OK;'''
+
+[[mutant]]
+id = "p18-06"
+name = "the check reads the profile's calibration file"
+test = "check"
+why = "0.18.0: pl_check() reads no file but the pack; afc2 with the profile and d.cal NULL keeps calibration::0."
+find = '''p->rig->display.calibration[0] && !p->sim.on && !p->checking) {'''
+replace = '''p->rig->display.calibration[0] && !p->sim.on) {'''
+
+[[mutant]]
+id = "p18-07"
+name = "a signal the profile has is still a need"
+test = "check"
+why = "0.18.0: visuomotor and bimanual with the profile's signals need only the participant field."
+find = '''        if (p->checking && p->have_rig && yrig_find_signal(p->rig, r->name)) continue;'''
+replace = ''''''
+
+[[mutant]]
+id = "p18-08"
+name = "pl_check() drops pl_check_desc.rig"
+test = "check"
+why = "0.18.0: every profile case's needs and refusals."
+find = '''    p->check_rig = d->rig;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "p18-09"
+name = "the check with a profile does not copy it"
+test = "check"
+why = "0.18.0: p->rig stays zero, so no role is bound and no view is the profile's: oddball keeps its needs."
+find = '''        if (!p->check_rig) return 0;
+        memcpy(p->rig, p->check_rig, sizeof *p->rig);'''
+replace = '''        if (!p->check_rig) return 0;'''

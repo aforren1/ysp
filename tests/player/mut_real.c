@@ -8,6 +8,9 @@
  *
  * Exit 0 when every case holds; a mutant that survives shows a branch of
  * the real path that no case can see. */
+#if !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1   /* main.c's sigaction(): before any system header */
+#endif
 #include "impl.c"
 #include "eval.c"
 #include "host.c"

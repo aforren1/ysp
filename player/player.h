@@ -37,6 +37,7 @@
  * helpers (ysp/response.h, RESPONSE TRIGGERS) */
 #include "ysp/response.h"
 
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -44,7 +45,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.17.0"
+#define PL_VERSION_STRING "0.18.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -617,7 +618,15 @@ typedef struct pl_check_desc {
     size_t      def_len;
     uint64_t    seed;       /* the session seed (D8)                          */
     const ycol_cal* cal;    /* the stand-in for a required calibration; NULL:
-                             * pl_check_nominal_cal()'s, made on each call   */
+                             * pl_check_nominal_cal()'s, made on each call.
+                             * With a rig that names a calibration whose
+                             * check is OK: that calibration, which the
+                             * caller reads (the check reads no file)      */
+    /* 0.18.0: the rig profile a real start would load (NULL: none). The
+     * check copies it, runs the loader's role and signal checks against it
+     * and lists no need that it meets (docs/player.md, "With a rig
+     * profile"). The caller loads it (yrig_load()); its devices never open */
+    const yrig_profile* rig;
 } pl_check_desc;
 
 /* Every pointer stays valid until pl_close(). */
@@ -871,6 +880,7 @@ struct pl_player {
                                * check; no stderr                           */
     bool      pack_reader;    /* entries come whole through a cursor       */
     const ycol_cal* check_cal; /* pl_check_desc.cal                        */
+    const yrig_profile* check_rig; /* pl_check_desc.rig                     */
     pl_need*  needs; int n_needs, c_needs;
     int       at_obj;         /* the object the load is at (PL_OBJ_*)      */
     const char* at_name;
@@ -888,6 +898,12 @@ struct pl_player {
                                * bind target: written, never read          */
     pl_sim    sim;            /* the stepped session (sim.c)                */
 };
+
+/* An operator's stop of a --sim run: main.c's SIGTERM handler sets it, and
+ * pl_run() reads it before each frame and stops as for Shift+Esc (exit 3,
+ * "aborted" with reason "request"). A handler may write only such an
+ * object. A real run leaves SIGTERM to SDL, which makes it a quit event. */
+extern volatile sig_atomic_t pl_stop_requested;
 
 /* --- load (lower.c) ------------------------------------------------------ */
 

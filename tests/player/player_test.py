@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 fails = 0
@@ -1091,6 +1092,87 @@ def t_r6_allow_below(ctx):
               "--allow-below-tier %s: exit %d: %s" % (val, r.rc, r.err[:200]))
     r = Run(ctx, "r6_allow_ok", d, args=["--max-trials", "1", "--allow-below-tier", "r"])
     check(r.rc == 0, "--allow-below-tier r: exit %d: %s" % (r.rc, r.err[:200]))
+
+def t_p18_version(ctx):
+    # 0.18.0: --version is the one line the designer compares with the
+    # player library it links (designer.md, "Plan of step 6", decision 5)
+    with open(os.path.join(HERE, "..", "..", "player", "player.h")) as f:
+        want = re.search(r'#define PL_VERSION_STRING "([^"]+)"', f.read()).group(1)
+    r = subprocess.run([ctx.player, "--version"], capture_output=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == ("ysp_player %s\n" % want).encode() and r.stderr == b"",
+          "--version: exit %d, stdout %r, stderr %r; want 'ysp_player %s'" % (r.returncode, r.stdout[:200], r.stderr[:200], want))
+
+
+def t_p18_sigterm(ctx):
+    # 0.18.0: SIGTERM stops --sim as Shift+Esc stops a real run (the
+    # designer's Stop): exit 3, session.json's "aborted" with reason
+    # "request", each finished trial's row as an unstopped run writes it,
+    # and no row for the trial that ran. 4,000 trials of 16 s: seconds of
+    # wall time, so the signal comes mid-session
+    if os.name == "nt":
+        print("  skipped: Windows sends no SIGTERM to another process")
+        return
+    import signal
+    d = base({"t": {"events": [{"on": "s"}, {"wait_s": 16}, {"off": "s"}]}},
+             [{"name": "c", "repetitions": 4, "timeline": [{"name": "l", "trial": "t", "rules": ["reps 1000"]}]}])
+    r0 = Run(ctx, "p18_term_build", d, args=["--max-trials", "1"])
+    if r0.rc != 0:
+        check(False, "p18_term: the pack: %s" % r0.err[:300])
+        return
+    data = os.path.join(ctx.out, "p18_term_data")
+    shutil.rmtree(data, ignore_errors=True)
+    log = os.path.join(ctx.out, "p18_term.log")
+    cmd = [ctx.player, r0.pack, "--out", data, "--sim", "--seed", "99", "--field", "participant=3"]
+    if ctx.hz is not None:
+        cmd += ["--sim-hz", ctx.hz]
+    trials = os.path.join(data, "trials.csv")
+    with open(log, "wb") as f:
+        p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        t0 = time.monotonic()
+        # the header and some rows reach the file (stdio's buffer)
+        while p.poll() is None and time.monotonic() - t0 < 60:
+            if os.path.exists(trials) and os.path.getsize(trials) > 4096:
+                break
+            time.sleep(0.005)
+        if p.poll() is None:
+            p.send_signal(signal.SIGTERM)
+        try:
+            rc = p.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            rc = p.wait()
+    with open(log, "rb") as f:
+        out = f.read(MAX_OUTPUT).decode("utf-8", "replace")
+    session = {}
+    if os.path.exists(os.path.join(data, "session.json")):
+        with open(os.path.join(data, "session.json")) as f:
+            session = json.load(f)
+    ab = session.get("aborted") or {}
+    n = ab.get("trials_written", -1)
+    rows = 0
+    if os.path.exists(trials):
+        with open(trials, newline="") as f:
+            rows = sum(1 for _ in csv.DictReader(f))
+    check(rc == 3, "p18_term: exit %d, want 3 (a stop by SIGTERM): %s" % (rc, out[:300]))
+    check(ab.get("reasons") == ["request"] and 0 < n < 4000 and rows == n,
+          "p18_term: aborted %s, %d rows in trials.csv" % (ab, rows))
+    ti = ab.get("trial_index")
+    check(ti is None or ti == n, "p18_term: the trial with no row is %s; %d rows written" % (ti, n))
+    want = "ysp_player: stopped by the operator; %d trials written to %s (%s)\n" % (
+        n, data, "trial %d has no row" % ti if ti is not None else "no trial was running")
+    check(out == want, "p18_term: output %r, want %r" % (out[:300], want))
+    if rc != 3 or n <= 0:
+        return
+    # the same session, not stopped, to n trials: its rows are the stopped
+    # run's bytes, and its output is --sim's one end line, as before 0.18.0
+    r1 = Run(ctx, "p18_term_full", d, args=["--max-trials", str(n)])
+    check(r1.rc == 0 and re.fullmatch(r"ysp_player: %d trials, %s, seed 99, experiment [0-9a-f]{64}\n" % (n, re.escape(r1.data)), r1.err) is not None,
+          "p18_term_full: exit %d, output %r" % (r1.rc, r1.err[:300]))
+    check(same_file(trials, os.path.join(r1.data, "trials.csv")), "p18_term: the stopped run's trials.csv differs from the unstopped run's first %d rows" % n)
+    with open(os.path.join(r1.data, "session.json")) as f:
+        check("aborted" not in json.load(f), "p18_term_full: session.json has 'aborted'")
+    shutil.rmtree(data, ignore_errors=True)
+
 
 def rate(ctx):
     """The simulated display's rate of this run (--hz; the player's 60 by
@@ -3377,7 +3459,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
          t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rig_signals, t_v2_two_templates_late, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late,
          t_v2_newest_stamp, t_v2_cross_roles, t_v2_entry_frame_after, t_v2_window_reach, t_v2_frame_rows_long,
-         t_v2_resp_pend_hit, t_v2_any_unseen, t_v2_limited_feed]
+         t_v2_resp_pend_hit, t_v2_any_unseen, t_v2_limited_feed, t_p18_version, t_p18_sigterm]
 
 
 def main():
@@ -3385,7 +3467,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--only", default=None)
+    ap.add_argument("--only", default=None, help="the cases to run, NAME[,NAME]")
     ap.add_argument("--player", default=None, help="another player binary (the mutation test's)")
     ap.add_argument("--hz", default=None, help="the simulated display's rate (default: the player's 60 Hz, no option)")
     a = ap.parse_args()
@@ -3416,7 +3498,7 @@ def main():
     if a.player:
         ctx.player = a.player
     for t in TESTS + [t_sound]:
-        if a.only and t.__name__ != a.only:
+        if a.only and t.__name__ not in a.only.split(","):
             continue
         cases += 1
         print("%s" % t.__name__)

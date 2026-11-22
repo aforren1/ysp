@@ -918,3 +918,15 @@ env = { PL_SIM_CASES = "live" }
 why = "live() gets the trial that starts."
 find = '''    p->sim.live_trial = p->sim.ask && p->sim.ask(p, p->global_trial);'''
 replace = '''    p->sim.live_trial = p->sim.ask && p->sim.ask(p, p->global_trial + 1);'''
+
+# --- p18-: 0.18.0, --sim's stop by SIGTERM (player_test.py t_p18_sigterm) --
+
+[[mutant]]
+id = "p18-r1"
+name = "the frame loop does not act on the stop flag"
+test = "player"
+env = { YPL_SHAPES = "t_p18_sigterm" }
+why = "0.18.0: SIGTERM must stop --sim as Shift+Esc stops a real run (exit 3, aborted with reason request)."
+find = '''            stop_asked = true;
+            yscr_request_abort();'''
+replace = '''            stop_asked = true;'''

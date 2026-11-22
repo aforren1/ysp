@@ -47,19 +47,55 @@
  * plan onset S seconds before the timeline's, as a landing frame shown late
  * gives (tests: the wait for the flip record).
  *
+ * --version prints "ysp_player VERSION" (PL_VERSION_STRING) and exits 0:
+ * the designer runs only the player of its own version (designer.md,
+ * "Plan of step 6", decision 5).
+ *
  * Exit code: 0; 1 when the pack, the definition or the rig is refused or
  * the run failed (the message goes to stderr); 2 for a bad argument; 3
- * when the operator stopped the session (Shift+Esc, the window's close):
- * the data set is closed, and session.json says so ("aborted").
+ * when the operator stopped the session (Shift+Esc, the window's close; in
+ * --sim, SIGTERM): the data set is closed, and session.json says so
+ * ("aborted").
  */
+#if !defined(_WIN32) && !defined(_DEFAULT_SOURCE) && !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+#define _DEFAULT_SOURCE 1   /* sigaction() under -std=c11; before any system header */
+#endif
 #include "player.h"
 
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static pl_player g_p;
+
+/* --sim's SIGTERM: the designer's Stop (designer.md, "Stop"). Only the flag:
+ * the frame loop reads it (pl_run()) and stops as an operator's Shift+Esc
+ * does, so the finished trials keep their rows and session.json says
+ * "aborted". A real run does not install it: SDL makes SIGTERM a quit
+ * event there. Windows sends no SIGTERM to another process: there the
+ * designer's Stop has no window to close in --sim, and only Kill (no
+ * "aborted", the data set not closed) ends it. */
+static void pl_on_term(int sig) {
+    (void)sig;
+    pl_stop_requested = 1;
+}
+
+static void pl_term_handler(void) {
+#if defined(_WIN32)
+    (void)signal(SIGTERM, pl_on_term);
+#else
+    /* sigaction: the handler stays for a second SIGTERM (signal()'s may
+     * reset to the default and end the process mid-write) */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = pl_on_term;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    (void)sigaction(SIGTERM, &sa, NULL);
+#endif
+}
 
 static int usage(void) {
     fprintf(stderr, "usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE]\n"
@@ -67,6 +103,7 @@ static int usage(void) {
                     "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
                     "                   [--samples FILE] [--sim-gain ROLE=UNITS]... [--test-draws FILE] [--sim-hz HZ]\n"
                     "       debug: [--profile] (a YSP_TRACE_RING build)\n"
+                    "       ysp_player --version\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
 }
@@ -91,6 +128,11 @@ static int run_main(pl_args* ap, int argc, char** argv) {
 #define a (*ap)
     int i, rc;
     a.max_seconds = 172800;
+    for (i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--version")) {
+            printf("ysp_player %s\n", PL_VERSION_STRING);
+            return 0;
+        }
     for (i = 1; i < argc; i++) {
         const char* s = argv[i];
         const char* v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -254,6 +296,9 @@ static int run_main(pl_args* ap, int argc, char** argv) {
     /* --sim runs on the virtual clock from before anything reads it, so the
      * records are the same on every host and every run */
     if (a.sim) yrt_virtual_begin(0);
+    /* before the load: a Stop during it ends the session at its first
+     * frame, with no trial, rather than by the signal */
+    if (a.sim && !a.draws_path) pl_term_handler();
     if (pl_load(&g_p, &a) < 0) {
         fprintf(stderr, "ysp_player: %s\n", g_p.error);
         rc = g_p.bad_arg ? 2 : 1;
@@ -263,7 +308,11 @@ static int run_main(pl_args* ap, int argc, char** argv) {
     rc = a.draws_path ? pl_v2_draws(&g_p) : pl_run(&g_p);
     if (rc < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
     if (g_p.aborted) {
-        printf("ysp_player: stopped by the operator; %d trials written to %s (trial %d has no row)\n", g_p.trials_done, a.out_dir, g_p.abort_trial);
+        /* abort_trial -1: the stop came between two trials */
+        if (g_p.abort_trial >= 0)
+            printf("ysp_player: stopped by the operator; %d trials written to %s (trial %d has no row)\n", g_p.trials_done, a.out_dir, g_p.abort_trial);
+        else
+            printf("ysp_player: stopped by the operator; %d trials written to %s (no trial was running)\n", g_p.trials_done, a.out_dir);
         pl_close(&g_p);
         return 3;
     }
