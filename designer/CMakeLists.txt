@@ -97,6 +97,20 @@ if(YSP_BUILD_TESTS)
         $<TARGET_FILE:test_child>)
     set_tests_properties(test_designer_platform PROPERTIES TIMEOUT 120)
     dsg_test(test_designer_platform)
+    # Step 6, part B: Build (core/build.c), checked against the ypak program.
+    if(TARGET ypak)
+        add_executable(test_designer_build ${PROJECT_SOURCE_DIR}/tests/designer/build_test.c)
+        target_link_libraries(test_designer_build PRIVATE ysp_designer_core)
+        target_compile_options(test_designer_build PRIVATE ${YSP_WARNINGS})
+        set_target_properties(test_designer_build PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_definitions(test_designer_build PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
+        add_dependencies(test_designer_build ypak)
+        add_test(NAME test_designer_build COMMAND test_designer_build ${CMAKE_CURRENT_BINARY_DIR}/designer_build_work
+            $<TARGET_FILE:ypak>)
+        set_tests_properties(test_designer_build PROPERTIES TIMEOUT 300)
+        dsg_test(test_designer_build)
+    endif()
     # Step 5, part A: the preview's core (core/preview.c), headless. GNU ld's
     # --wrap counts heap calls in a tick and holds an attach; neither MSVC's
     # linker nor Apple's has it, so there those checks skip.
