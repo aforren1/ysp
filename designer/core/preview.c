@@ -51,7 +51,11 @@ enum { PV_FF_NONE = 0, PV_FF_FOUND, PV_FF_LEFT, PV_FF_STALL, PV_FF_CAP };
 enum { PV_LIVE = 0, PV_ENDED, PV_FAILED };
 
 typedef struct pv_out { const char* role; uint32_t code; int64_t t_ns; } pv_out;
-typedef struct pv_drive { int role; int units; } pv_drive;
+/* A role that the pointer drives. rel: a relative role with the rig
+ * profile's signal, whose samples are a raw mouse's counts (player.md,
+ * "Time and input"): the pointer's motion in role units times cpu, the
+ * counts a role unit (dsg_rig_counts_per_unit()). */
+typedef struct pv_drive { int role; int units; bool rel; double cpu[2]; } pv_drive;
 typedef struct pv_undriven { const char* name; const char* why; } pv_undriven;
 
 /* The session's private part (dsg_session.impl). Made on the check thread
@@ -140,6 +144,11 @@ struct dsg_preview {
     uint64_t              choices_down;
     float                 ptr_x, ptr_y;
     bool                  ptr_inside, ptr_dirty;
+    /* the pointer's place at the last sample of a relative role: its
+     * motion from there is the next sample; false after it left the
+     * display, a pause or a new session, so no jump is sent */
+    float                 rel_x, rel_y;
+    bool                  rel_have;
     bool                  keyboard;
     /* the preview issue */
     bool                  have_issue;
@@ -155,7 +164,7 @@ static bool same_settings(const dsg_session_settings* a, const dsg_session_setti
     int i;
     if (a->width != b->width || a->height != b->height || a->hz != b->hz || a->seed != b->seed || a->rt_s < b->rt_s ||
         a->rt_s > b->rt_s || a->pin_row != b->pin_row || a->n_fields != b->n_fields || strcmp(a->participant, b->participant) != 0 ||
-        strcmp(a->pin_leaf, b->pin_leaf) != 0)
+        strcmp(a->pin_leaf, b->pin_leaf) != 0 || strcmp(a->rig, b->rig) != 0)
         return false;
     for (i = 0; i < a->n_fields && i < DSG_SESSION_FIELDS; i++)
         if (strcmp(a->fields[i].name, b->fields[i].name) != 0 || strcmp(a->fields[i].value, b->fields[i].value) != 0) return false;
@@ -259,7 +268,7 @@ static void refuse(pv_sess* x, const char* msg, int obj, const char* name) {
 
 /* The lists that the UI reads: the pin's leaves, the roles the pointer
  * drives, the roles it does not (decision 3, "Input"). */
-static int pv_lists(pv_sess* x) {
+static int pv_lists(pv_sess* x, const dsg_rig* rig) {
     pl_player* p = x->p;
     const yexp_def* def = p->def;
     int n = 0, i, k;
@@ -281,20 +290,30 @@ static int pv_lists(pv_sess* x) {
     x->n_leaves = n;
     for (i = 0; i < def->n_sigroles; i++) {
         const yexp_sigrole* r = &def->sigroles[i];
+        const bool rel = r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative);
         const char* why = NULL;
-        if (r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative))
-            why = "relative: the preview does not capture the mouse";
-        else if (r->type == YEXP_SIG_POSITION3D) why = "position3d";
+        double cpu[2] = { 1.0, 1.0 };
+        if (r->type == YEXP_SIG_POSITION3D) why = "position3d";
         else if (r->type == YEXP_SIG_SCALAR) why = "scalar";
         else if (r->type == YEXP_SIG_GAZE) why = "gaze";
         else if (r->units == YEXP_UNITS_WORKSPACE_CM) why = "workspace_cm units";
         else if (r->units == YEXP_UNITS_DEVICE) why = "device units";
+        /* step 6: with the profile's signal, the pointer's motion as the
+         * profile's counts; with none, the samples would be role units at
+         * the stand-in gain 1, which no real run has */
+        else if (rel && !rig) why = "relative: the preview does not capture the mouse";
+        else if (rel && !dsg_rig_counts_per_unit(rig, r->name, (int)r->units + 1, cpu))
+            why = "relative: the rig profile has no signal for it";
         if (why) {
             x->undriven[x->n_undriven].name = r->name;
             x->undriven[x->n_undriven++].why = why;
         } else {
-            x->drive[x->n_drive].role = i;
-            x->drive[x->n_drive++].units = r->units;
+            pv_drive* dv = &x->drive[x->n_drive++];
+            dv->role = i;
+            dv->units = r->units;
+            dv->rel = rel;
+            dv->cpu[0] = cpu[0];
+            dv->cpu[1] = cpu[1];
         }
     }
     for (i = 0; i < def->n_roles; i++) {
@@ -306,11 +325,14 @@ static int pv_lists(pv_sess* x) {
     }
     {
         /* gfx's own scale factors (ysp/gfx.h, ygfx_open()), from the view
-         * the load gave the gfx, else the built-in rig's: 570 mm away,
+         * the load gave the gfx, else the profile's (a definition in px
+         * gives the gfx none), else the built-in rig's: 570 mm away,
          * 0.27 mm a px (1920 px over 518.4 mm), as pl_gd_units() scales it */
         const double w = (double)p->sim.width;
-        const double wmm = p->view.width_mm > 0 ? (double)p->view.width_mm : 0.27 * w;
-        const double dmm = p->view.distance_mm > 0 ? (double)p->view.distance_mm : 570.0;
+        const yrig_profile* pr = rig ? dsg_rig_profile(rig) : NULL;
+        const bool rig_view = pr && pr->view.set && pr->view.width_px > 0;
+        const double wmm = p->view.width_mm > 0 ? (double)p->view.width_mm : rig_view ? pr->view.width_mm * w / (double)pr->view.width_px : 0.27 * w;
+        const double dmm = p->view.distance_mm > 0 ? (double)p->view.distance_mm : rig_view ? pr->view.distance_mm : 570.0;
         x->ppu_cm = w * 10.0 / wmm;
         x->ppu_deg = w / wmm * dmm * tan(3.14159265358979323846 / 180.0);
     }
@@ -365,8 +387,9 @@ static int pv_load(void* ctx, dsg_session* s, const char* text, size_t n, char* 
     pl_check_result r;
     char parent[DSG_PATH_MAX];
     char* slash;
-    int lo = 1, hi = 0, i;
+    int lo = 1, hi = 0, i, rc;
     size_t pack_n = 0;
+    dsg_rig* rig = NULL;
     if (!x) {
         snprintf(err, cap, "out of memory for the session");
         return -1;
@@ -418,6 +441,18 @@ static int pv_load(void* ctx, dsg_session* s, const char* text, size_t n, char* 
         snprintf(err, cap, "no check pack to load the session from");
         return -1;
     }
+    if (s->settings.rig[0]) {
+        /* decision 14: the session's own load of the profile (a dsg_rig is
+         * one thread's); the player copies the profile and the
+         * calibration, so it goes after the lists */
+        char why[512];
+        if (dsg_rig_load(s->settings.rig, &rig, why, sizeof why) != 0) {
+            snprintf(err, cap, "the rig profile '%s' does not load: %s", s->settings.rig, why);
+            return -1;
+        }
+        d.rig = dsg_rig_profile(rig);
+        d.cal = dsg_rig_cal(rig);
+    }
     d.def_text = x->text;
     d.def_len = n;
     d.seed = s->settings.seed;
@@ -449,9 +484,12 @@ static int pv_load(void* ctx, dsg_session* s, const char* text, size_t n, char* 
         /* posted, not failed: the UI places the refusal in the text and
          * keeps the session it shows */
         refuse(x, r.message && r.message[0] ? r.message : x->p->error, r.object, r.object_name);
+        dsg_rig_free(rig);
         return 0;
     }
-    if (pv_lists(x) != 0) {
+    rc = pv_lists(x, rig);
+    dsg_rig_free(rig);
+    if (rc != 0) {
         snprintf(err, cap, "out of memory for the session");
         return -1;
     }
@@ -744,6 +782,7 @@ static void attach_step(dsg_preview* pv, int64_t now) {
     pv->shown_unix = pv->attaching_unix;
     pv->n_in = 0;
     pv->ptr_dirty = pv->ptr_inside;
+    pv->rel_have = false;
     anchor(pv, now);
     /* paused: one drawn frame, so the pane shows the new definition */
     if (pv->paused) pv->step_req = true;
@@ -764,11 +803,21 @@ static void deliver(dsg_preview* pv, pv_sess* x) {
     if (pv->ptr_dirty && pv->ptr_inside) {
         /* D22: the origin at the display's center, x right, y down */
         const double cx = (double)pv->ptr_x - 0.5 * (double)p->sim.width, cy = (double)pv->ptr_y - 0.5 * (double)p->sim.height;
+        const double dx = (double)pv->ptr_x - (double)pv->rel_x, dy = (double)pv->ptr_y - (double)pv->rel_y;
         for (i = 0; i < x->n_drive; i++) {
-            const int u = x->drive[i].units;
+            const pv_drive* dv = &x->drive[i];
+            const int u = dv->units;
             const double k = u == YEXP_UNITS_DISPLAY_CM ? x->ppu_cm : u == YEXP_UNITS_DISPLAY_DEG ? x->ppu_deg : 1.0;
-            (void)pl_sim_sample(p, t, x->drive[i].role, (float)(cx / k), (float)(cy / k));
+            /* Part P2: a relative role's sample is counts, never role units */
+            if (dv->rel) {
+                if (pv->rel_have) (void)pl_sim_sample(p, t, dv->role, (float)(dx / k * dv->cpu[0]), (float)(dy / k * dv->cpu[1]));
+            } else {
+                (void)pl_sim_sample(p, t, dv->role, (float)(cx / k), (float)(cy / k));
+            }
         }
+        pv->rel_x = pv->ptr_x;
+        pv->rel_y = pv->ptr_y;
+        pv->rel_have = true;
     }
     pv->ptr_dirty = false;
 }
@@ -963,6 +1012,9 @@ void dsg_preview_choice(dsg_preview* pv, int i, bool down) {
 
 void dsg_preview_pointer(dsg_preview* pv, float x_px, float y_px, bool inside) {
     pv->ptr_inside = inside;
+    /* a relative role moves only with the motion that a running session
+     * sees: none across a gap outside the display or a pause */
+    if (!inside || !running(pv)) pv->rel_have = false;
     if (!inside) return;
     pv->ptr_x = x_px;
     pv->ptr_y = y_px;

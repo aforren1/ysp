@@ -39,9 +39,15 @@ struct dsg_checker {
     uint8_t      failed_text[32];
     bool         have_failed;
     char         failed_msg[1024];
-    /* Step 6: the rig profile of the next checks (dsg_checker_set_rig());
-     * part G loads it and gives it to pl_check_desc */
+    /* Step 6: the rig profile of the next checks (dsg_checker_set_rig()),
+     * loaded at a check when the name or its files changed (176 us a load:
+     * never every check) */
     char         rig_name[DSG_RIG_NAME];
+    dsg_rig*     rig;           /* rig_name's, or NULL                        */
+    bool         rig_failed;    /* rig_name's load failed: rig_err says why    */
+    uint64_t     rig_key;       /* dsg_rig__file_key() at that failure         */
+    char         rig_failed_name[DSG_RIG_NAME];
+    char         rig_err[512];
     /* the report */
     dsg_issue*   issues;
     size_t*      msg_off;       /* into strs, until the report is final      */
@@ -115,13 +121,14 @@ void dsg_checker_forget(dsg_checker* c) {
     c->folder[0] = 0;
 }
 
-/* Part S's stub: the name is kept and the check runs with no profile, as
- * before step 6. Part G loads the profile here (dsg_rig_load()). */
+/* The load waits for the check (load_rig()): the worker calls this before
+ * every check with the job's name. */
 void dsg_checker_set_rig(dsg_checker* c, const char* name) { snprintf(c->rig_name, sizeof c->rig_name, "%s", name ? name : ""); }
 
 void dsg_checker_free(dsg_checker* c) {
     if (!c) return;
     dsg_checker_forget(c);
+    dsg_rig_free(c->rig);
     free(c->pl);
     free(c->rep);
     free(c->issues);
@@ -150,7 +157,8 @@ static size_t put_str(dsg_checker* c, const char* s) {
     return at;
 }
 
-static void add_issue(dsg_checker* c, int sev, int from, const dsg_place* at, int object, const char* name, const char* fmt, ...) {
+/* The issue added, or NULL when out of memory. */
+static dsg_issue* add_issue(dsg_checker* c, int sev, int from, const dsg_place* at, int object, const char* name, const char* fmt, ...) {
     char msg[1536];
     va_list ap;
     dsg_issue* is;
@@ -159,13 +167,13 @@ static void add_issue(dsg_checker* c, int sev, int from, const dsg_place* at, in
         dsg_issue* ni = (dsg_issue*)realloc(c->issues, (size_t)nc * sizeof *ni);
         size_t* nm;
         size_t* nn;
-        if (!ni) return;
+        if (!ni) return NULL;
         c->issues = ni;
         nm = (size_t*)realloc(c->msg_off, (size_t)nc * sizeof *nm);
-        if (!nm) return;
+        if (!nm) return NULL;
         c->msg_off = nm;
         nn = (size_t*)realloc(c->name_off, (size_t)nc * sizeof *nn);
-        if (!nn) return;
+        if (!nn) return NULL;
         c->name_off = nn;
         c->c_issues = nc;
     }
@@ -180,8 +188,8 @@ static void add_issue(dsg_checker* c, int sev, int from, const dsg_place* at, in
     is->object = object;
     c->msg_off[c->n_issues] = put_str(c, msg);
     c->name_off[c->n_issues] = name ? put_str(c, name) : SIZE_MAX;
-    if (c->msg_off[c->n_issues] == SIZE_MAX) return;
-    c->n_issues++;
+    if (c->msg_off[c->n_issues] == SIZE_MAX) return NULL;
+    return &c->issues[c->n_issues++];
 }
 
 /* The place a message gives as "line N, column M" (the pack tool's form),
@@ -491,6 +499,87 @@ static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, si
     return false;
 }
 
+/* --- the rig profile -------------------------------------------------------- */
+
+/* rig.c's, for the checker only (not dsg.h's: frozen by part S) */
+const char* dsg_rig__cal_error(const dsg_rig* r);
+uint64_t dsg_rig__file_key(const char* name);
+
+/* The profile of c->rig_name. A load costs 176 us, so it runs again only
+ * when the name changed or a file did (two stats a check); a load that
+ * failed runs again only when the profile's file or the folder's refusal
+ * changed. NULL: none chosen, or its load failed (rig_err says why). */
+static dsg_rig* load_rig(dsg_checker* c) {
+    uint64_t key;
+    if (!c->rig_name[0]) {
+        dsg_rig_free(c->rig);
+        c->rig = NULL;
+        c->rig_failed = false;
+        return NULL;
+    }
+    if (c->rig && strcmp(dsg_rig_name(c->rig), c->rig_name) == 0 && !dsg_rig_changed(c->rig)) return c->rig;
+    key = dsg_rig__file_key(c->rig_name);
+    if (!c->rig && c->rig_failed && strcmp(c->rig_failed_name, c->rig_name) == 0 && key == c->rig_key) return NULL;
+    dsg_rig_free(c->rig);
+    c->rig = NULL;
+    c->rig_failed = dsg_rig_load(c->rig_name, &c->rig, c->rig_err, sizeof c->rig_err) != 0;
+    if (c->rig_failed) {
+        c->rig_key = key;
+        snprintf(c->rig_failed_name, sizeof c->rig_failed_name, "%s", c->rig_name);
+        if (!c->rig_err[0]) snprintf(c->rig_err, sizeof c->rig_err, "the profile does not load");
+    }
+    return c->rig;
+}
+
+/* The profile's own issues: a load that failed, a calibration file that a
+ * real start cannot read, and each note of yrig_load()'s checks. The Issues
+ * panel puts "rig profile 'NAME': " before each (dsg_issue.rig). */
+static void rig_issues(dsg_checker* c, const dsg_rig* rig) {
+    const yrig_profile* pr;
+    dsg_issue* is;
+    int i;
+    if (!c->rig_name[0]) return;
+    if (!rig) {
+        is = add_issue(c, DSG_SEV_ERROR, DSG_FROM_RIG, NULL, PL_OBJ_NONE, NULL, "%s; the check ran with no profile", c->rig_err);
+        if (is) is->rig = true;
+        return;
+    }
+    pr = dsg_rig_profile(rig);
+    if (dsg_rig__cal_error(rig)[0]) {
+        is = add_issue(c, DSG_SEV_ERROR, DSG_FROM_RIG, NULL, PL_OBJ_NONE, NULL, "%s: a real run refuses to start", dsg_rig__cal_error(rig));
+        if (is) is->rig = true;
+    }
+    for (i = 0; i < pr->n_notes && i < YRIG_MAX_NOTES; i++) {
+        is = add_issue(c, DSG_SEV_NOTE, DSG_FROM_RIG, NULL, PL_OBJ_NONE, NULL, "%s", pr->notes[i]);
+        if (is) is->rig = true;
+    }
+}
+
+/* With a profile the check refused: the issues in [i0, i1) that the
+ * loader or the player gave and that a check with no profile does not
+ * give are the profile's doing (a role bound to a family that the role
+ * does not list), so dsg_issue.rig names it. One more pl_check(), only
+ * when the first one refused. */
+static void mark_rig_issues(dsg_checker* c, pl_check_desc* d, int i0, int i1) {
+    pl_check_result res;
+    int i, k;
+    memset(&res, 0, sizeof res);
+    d->rig = NULL;
+    d->cal = c->have_cal ? &c->cal : NULL;
+    (void)pl_check(c->pl, d, &res);
+    for (i = i0; i < i1; i++) {
+        dsg_issue* is = &c->issues[i];
+        const char* m = c->strs + c->msg_off[i];
+        bool found = false;
+        if (is->from != DSG_FROM_LOADER && is->from != DSG_FROM_PLAYER) continue;
+        if (is->severity != DSG_SEV_ERROR && is->severity != DSG_SEV_WARNING) continue;
+        for (k = 0; res.report && k < res.report->n_diags && !found; k++) found = strcmp(res.report->diags[k].msg, m) == 0;
+        if (!found && res.status == PL_CHECK_REFUSED && res.message) found = strcmp(res.message, m) == 0;
+        if (!found) is->rig = true;
+    }
+    pl_close(c->pl);
+}
+
 /* --- the check ------------------------------------------------------------- */
 
 int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, dsg_report* r) {
@@ -505,8 +594,9 @@ int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, siz
     tables_in ti;
     const tables_in* tables = &ti;
     pl_check_result res;
-    int i;
+    int i, i0, i1;
     bool derive_failed = false;
+    dsg_rig* rig;
     char derive_err[1024];
     uint8_t tkey[32] = { 0 };
     ti.t = tbl;
@@ -520,6 +610,9 @@ int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, siz
         snprintf(c->folder, sizeof c->folder, "%s", p->folder);
     }
     tables_key(tables, tkey);
+    rig = load_rig(c);
+    snprintf(r->rig, sizeof r->rig, "%s", c->rig_name);
+    rig_issues(c, rig);
 
     if (!c->pack) {
         /* No pack yet: the loader alone, with no host, says whether the
@@ -557,8 +650,12 @@ int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, siz
     d.def_text = text;
     d.def_len = n;
     d.seed = DSG_CHECK_SEED;
-    d.cal = c->have_cal ? &c->cal : NULL;
+    /* decision 13: the profile's own calibration meets a required one only
+     * when its check passed (dsg_rig_cal()); else the stand-in */
+    d.rig = rig ? dsg_rig_profile(rig) : NULL;
+    d.cal = rig && dsg_rig_cal(rig) ? dsg_rig_cal(rig) : c->have_cal ? &c->cal : NULL;
     r->status = pl_check(c->pl, &d, &res);
+    i0 = c->n_issues;
     if (res.report) add_diags(c, res.report, text, n);
     /* The pack tool's own refusal of the texts; a text the loader refuses
      * has the loader's message, which says the same with more care. */
@@ -572,8 +669,10 @@ int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, siz
         dsg_locate_object(text, n, res.object, res.object_name, &at);
         add_issue(c, DSG_SEV_ERROR, DSG_FROM_PLAYER, &at, res.object, res.object_name, "%s", res.message);
     }
+    i1 = c->n_issues;
     for (i = 0; i < res.n_needs; i++) add_need(c, &res.needs[i], text, n);
     pl_close(c->pl);
+    if (rig && r->status != PL_CHECK_OK) mark_rig_issues(c, &d, i0, i1);
     finish(c, r);
     return 0;
 }
