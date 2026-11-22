@@ -2101,6 +2101,369 @@ returns); no single mutant of it fails a test.
   `-Wsometimes-uninitialized`) and emcc (the WebAssembly stubs): no
   warning.
 
+#### Part S as built (2026-11-22)
+
+Branch `step6-s`, from `designer-step6` (`2d367ba`: the plan, P, K and X
+merged). Part S gives parts B, R, G and V frozen interfaces and stubs, as
+part S of step 5 did. With the stubs the designer runs as before step 6:
+Build and Run are in the toolbar, and each says that it is not built yet;
+the Run view says the same; the check and the preview run with no rig
+profile.
+
+**Decided for part S** (by the coordinator, 2026-11-22):
+- Part X's deviations are accepted as built: `int dsg_proc_stop()` (0:
+  nothing went out, so Kill shows at once, for example `--sim` on
+  Windows); a free of a running child detaches its watch thread; every
+  signal at its default; a process group of its own; with `cwd`, `argv[0]`
+  must be absolute; no job object on Windows.
+- The findings of parts P and K go into the interfaces and into the list
+  of what each part of wave 2 does (below).
+
+**The frozen interfaces.** After part S, parts B, R, G and V change none
+of these files. A part that needs a change stops and reports it.
+
+| File | What it gives | Who calls it |
+|---|---|---|
+| `designer/core/dsg.h` (0.4.0) | `DSG_FROM_BUILD`, `DSG_FROM_PLAYER_RUN`, `DSG_FROM_RIG`; `dsg_issue.rig`, `dsg_report.rig`; `DSG_RIG_NAME`, `DSG_CACHE_DIR`, `DSG_BUILD_DIR`; the rig, Build and Run sections (below); `dsg_checker_set_rig()`; `dsg_worker_check(..., rig)`; `dsg_session_settings.rig` | B, R and G implement them; V and `ui.cpp` call them |
+| `designer/core/run_part.c` | `dsg_run_settings_default()`, `dsg_run_part_read()`, `dsg_run_part_write()`: the view file's part `run` | `ui.cpp` only |
+| `designer/core/preview_part.c`, `preview.h` | the part `preview` keeps `"rig"` (`session.rig`); `dsg_preview_set()` restarts on a change of it (G) | `ui.cpp`; G in `preview.c` |
+| `designer/core/worker.c` | the check job carries the rig's name and calls `dsg_checker_set_rig()` before each check | the UI |
+| `designer/app/views.h` | `ui_aux_view_open()`, `ui_show_aux_view()`; `ui_build()`, `ui_can_build()`, `ui_build_busy()`, `ui_build_last()`, `ui_build_stale()`, `ui_can_run()`, `ui_run_start()`, `ui_run_stop()`, `ui_run_kill()`, `ui_run()`, `ui_run_settings()`, `ui_check_again()` | V |
+| `designer/app/ui.h` | `UiPlatform.player_path`, `UiPlatform.wake_run`; `ui_run_active()`, `ui_run_wait_ms()`, `ui_wait_builds()`; `ui_report()` is the merged report | `main.cpp`, the tests |
+| `designer/app/ui.cpp`, `main.cpp`, `views.cpp` | below | |
+| `designer/CMakeLists.txt` | the four new core files, `view_run.cpp`; `ysp_player` copied beside `ysp_designer` | |
+| `tests/designer/build_run_double.h`, `.c` | a double of `build.c` and `run.c` for `test_designer_ui` | S's tests |
+
+`dsg.h`, the rig section (part G, `rig.c`). A `dsg_rig` is one thread's:
+the checker keeps one on the check thread, a session's load one, the Run
+view one on the UI thread.
+```c
+int  dsg_rig_list(char (*names)[DSG_RIG_NAME], int cap, char* err, size_t err_cap);
+int  dsg_rig_load(const char* name, dsg_rig** out, char* err, size_t cap);  /* and its calibration */
+void dsg_rig_free(dsg_rig* r);
+const char* dsg_rig_name(const dsg_rig* r);
+const char* dsg_rig_path(const dsg_rig* r);
+const struct yrig_profile* dsg_rig_profile(const dsg_rig* r);
+const struct ycol_cal* dsg_rig_cal(const dsg_rig* r);    /* NULL unless its check is OK */
+bool dsg_rig_changed(const dsg_rig* r);                   /* size or time, a stat each */
+int  dsg_rig_summary(const dsg_rig* r, char* out, size_t cap);   /* the banner's line */
+bool dsg_rig_counts_per_unit(const dsg_rig* r, const char* role, int role_units, double out[2]);
+void dsg_checker_set_rig(dsg_checker* c, const char* name);       /* check.c */
+```
+
+`dsg.h`, the Build section (part B, `build.c`):
+```c
+dsg_builder* dsg_builder_start(const dsg_builder_desc* d, char* err, size_t cap);  /* wake, ctx, no_thread */
+void dsg_builder_stop(dsg_builder* b);
+int  dsg_build_path(const dsg_project* p, char* out, size_t cap);     /* PROJECT/build/NAME.ysppak */
+int  dsg_build_post(dsg_builder* b, const dsg_project* p, const char* out_path, uint64_t revision, char* err, size_t cap);
+void dsg_build_cancel(dsg_builder* b);
+bool dsg_build_busy(const dsg_builder* b);
+bool dsg_build_take(dsg_builder* b, const dsg_build_result** out);
+int  dsg_build_wait(dsg_builder* b, int64_t timeout_ns);
+bool dsg_build_stale(const dsg_project* p, const dsg_build_result* r, uint64_t revision);
+int  dsg_build_check_pack(const dsg_project* p, const char* desc, size_t desc_len, const char* out_path, char* err, size_t cap);
+```
+`dsg_build_result`: revision, status (`DSG_BUILD_NONE`, `_OK`, `_FAILED`,
+`_CANCELED`), a `dsg_report` of `DSG_FROM_BUILD` issues, path, size,
+`pack_id[72]` (`ypak_id()`'s form), ms, `done_unix_s`, and the stamp
+(`dsg_build_source`: absolute path, size, modification time).
+
+`dsg.h`, the Run section (part R, `run.c`; S's `run_part.c`):
+```c
+typedef struct dsg_run_settings {     /* the view file's part "run", but out_dir */
+    char rig[DSG_RIG_NAME]; bool sim; char participant[32];
+    int32_t n_fields; dsg_session_field fields[DSG_SESSION_FIELDS];
+    char seed[24]; int32_t n_below; char allow_below_tier[DSG_RUN_ROLES][32];
+    bool windowed; double max_seconds; int32_t n_gains; dsg_run_gain gains[DSG_RUN_ROLES];
+    char out_dir[DSG_PATH_MAX];
+} dsg_run_settings;
+int  dsg_run_args(const dsg_run_settings* s, const char* player, const char* pack, const char* out_dir,
+                  dsg_run_argv* out, char* err, size_t cap);
+int  dsg_run_out_dir(const char* folder, const dsg_run_settings* s, int64_t now_unix_s, char* out, size_t cap);
+const char* dsg_run_exit_text(int status, char* buf, size_t cap);
+int  dsg_player_version(const char* player, const char* tmp_dir, char* out, size_t cap, char* err, size_t err_cap);
+int  dsg_run_start(dsg_run** out, const dsg_run_desc* d, char* err, size_t cap);
+int  dsg_run_stop(dsg_run* r, int64_t now_ns);     /* 0: nothing went out, Kill now */
+void dsg_run_kill(dsg_run* r);
+bool dsg_run_tick(dsg_run* r, int64_t now_ns);     /* the UI thread, a frame */
+void dsg_run_get_info(const dsg_run* r, dsg_run_info* out);
+bool dsg_run_issue(const dsg_run* r, dsg_issue* out);
+void dsg_run_free(dsg_run* r);                     /* a running player is left running */
+```
+`dsg_run_desc`: argv, cwd, out_dir, tmp_dir, sim, wake, ctx, now_ns.
+`dsg_run_info`: state (`DSG_RUN_STARTING`, `_RUNNING`, `_STOPPING`,
+`_ENDED`), elapsed, trials, the last row's response, outcome and rt, the
+log's last `DSG_RUN_LOG_LINES` (200) lines, the exit status and its text,
+`kill_offered`, the output folder, the log's path, the command line. The
+knobs: `DSG_RUN_MAX_SECONDS` (600), `DSG_RUN_REDRAW_HZ` (2),
+`DSG_RUN_KILL_AFTER_NS` (5 s), `DSG_RUN_ROLES` (16), `DSG_RUN_ARGV` (96).
+
+**What `ui.cpp` and `main.cpp` do, frozen.**
+- **Toolbar.** After Redo, in the ID scope `tool`: Build, Run, and while a
+  run goes Stop, and Kill when `kill_offered`. A disabled button's tooltip
+  says why. Build is disabled with no project, while a Build goes (or one
+  that Run posted) and while a run goes. Run is disabled as Build is, and
+  until the check of the document's current revision came back with no
+  error. Then one check box per AUX view, in the ID scope `aux`
+  (`//##designer/aux/Preview`, `//##designer/aux/Run`). In a browser there
+  is no Build, Run or Run view (decision 16).
+- **The AUX pane** shows while one AUX view is ticked; the ticked views
+  stack in the views' order. `ui_aux_open()` and `ui_show_aux()` are now
+  the Preview's own box. The part `preview` keeps the Preview's `open`, the
+  part `run` the Run view's.
+- **Build.** `ui_build()` saves when the document is dirty (decision 2),
+  then posts to `dsg_build_path()` with the document's revision. The
+  build thread's wake is the check thread's event. Each frame takes the
+  result; one of another project (below the floor) is dropped.
+- **Run.** `ui_run_start()` builds first when the document is dirty or
+  `dsg_build_stale()` says so, and starts the run at that Build's result
+  when it is OK. The start: the output folder (`settings.out_dir`, else
+  `dsg_run_out_dir()` with the time now) must not exist; `dsg_run_args()`;
+  `PROJECT/.designer` as `tmp_dir`; `dsg_run_start()`. A real run (not
+  `sim`) closes the preview's session (decision 9) and keeps its settings;
+  at the run's end the preview opens again and a check is posted, so a
+  session follows. Each frame calls `dsg_run_tick()` and, at the end, says
+  how it ended in the status.
+- **The rig of the check** is `settings.rig` of the Run view; a change of
+  it posts a check at the next frame.
+- **The merged report.** `ui_report()`: the check's issues, then the last
+  Build's, then the run's (`dsg_run_issue()`, copied). `status`, `built`,
+  `have_pack` and `rig` are the check's; `n_errors` counts all.
+  `ui_issue_path()`, the marks of the views and a click follow that order,
+  so the tables view's `issue_sel` maps a Build issue of a table to its cell
+  with no new code. The Issues panel's severity column says `build`, `run`
+  or `rig` for those sources, and an issue with `rig` set shows as "rig
+  profile 'NAME': message" (the check's rig; a run issue's: the run's).
+- **Quit, Open or New while a run goes** asks "A run goes": Stop the run
+  (the action goes on at the run's end; Kill shows in the toolbar),
+  Leave it running (`dsg_run_free()`), or Cancel. Then the unsaved
+  changes' question, as before.
+- **The redraw rate.** `dsg_run_desc.wake` is `ui.cpp`'s: it counts the
+  wake-up (an atomic) and calls `UiPlatform.wake_run`. `main.cpp` pushes
+  its own event type for it, which is not input: no settle frames.
+  `ui_run_wait_ms()` is -1 with no new wake-up, else the time to the last
+  frame plus 1/`DSG_RUN_REDRAW_HZ`; the loop waits that long
+  (`SDL_WaitEventTimeout()`) and then draws. Every frame takes the progress.
+- **`main.cpp`**: `UiPlatform.player_path` is `SDL_GetBasePath()` and
+  `ysp_player` (`.exe` on Windows); CMake copies `ysp_player` there at
+  every build (`copy_if_different`).
+
+**Changes from the plan's interface, and why.**
+- `dsg_proc_stop()` returns `int` (part X), and `dsg_run_stop()` passes it
+  on.
+- `DSG_FROM_RIG`, `dsg_issue.rig` and `dsg_report.rig` are new (part P's
+  finding): a refusal that the profile causes, for example `role 'resp':
+  the rig binds it to family 'xid'`, names the profile in the Issues panel,
+  and the profile's own load errors and notes have a source.
+- `dsg_checker_set_rig()` is new: the worker passes the job's rig to the
+  checker before each check, so `dsg_check_tables()` keeps its signature
+  and its callers.
+- `dsg_build_check_pack()` is new (part K's finding): `check.c`'s build of
+  the check pack calls it in place of its own `ypt_build_text()`, so part B
+  owns the check pack's cache and any skip of it in `build.c`, and changes
+  no line of `check.c`. Only part G edits `check.c`.
+- `dsg_rig_counts_per_unit()` is new (part P2's finding), for part G.
+- `dsg_run_issue()` is new: a failed run's line as an issue, which
+  `ui.cpp` puts after Build's.
+- `dsg_player_version()` takes a `tmp_dir`: `dsg_proc_start()` writes
+  the output to a file that must not exist. `dsg_run_start()` makes the
+  version check itself (decision 5), so `ui.cpp` does not.
+- `dsg_build_post()` and `dsg_run_args()` take `err`; `dsg_run_args()`
+  takes the player and the output folder and fills a `dsg_run_argv` (no
+  heap); `dsg_build_busy()` and `dsg_build_wait()` are new (the toolbar;
+  the tests). `dsg_build_path()` is new (decision 1's name, in one place).
+- `views.h` is not "unchanged": the Run view needs Build and Run from
+  `ui.cpp`, which owns them (`ui_build()` and the rest above), and each
+  AUX view has its own check box (`ui_aux_view_open()`).
+- `ui.h` gains `UiPlatform.wake_run` and `ui_run_wait_ms()`: the plan's
+  `RUN_REDRAW_HZ` needs a wake-up that is not input (a check's wake brings
+  three settle frames) and a loop that waits with a timeout.
+- The part `run` also keeps `participant` (for `--participant`) and
+  `gains`; `seed` is a string of digits (`""`: the player draws one).
+  `rig` is never a path: the player reads `--rig X` as a file when X has a
+  slash or ends in `.json`.
+- `dsg_session_settings.rig` `""` is the built-in simulated rig; the
+  preview has no "no profile" of its own, because `pl_sim_desc.rig` NULL
+  is the built-in rig.
+- `ysp_player` is copied beside the designer by a target of its own
+  (`ysp_player_beside_designer`), not written there, so the player's own
+  folder and tests do not change.
+
+**What each part of wave 2 does.**
+
+Part B (`build.c`, `tests/designer/build_test.c`):
+- Every call of the Build section. The thread is a `yrt_pump` as the
+  check thread's; `dsg_build_post()` is newest wins; `dsg_builder_stop()`
+  cancels through `ypt_options.cancel`.
+- `ypt_options.cache` is `PROJECT/` `DSG_CACHE_DIR` for Build and for the
+  check pack (`dsg_build_check_pack()`), and B picks `cache_max` (a knob
+  in `build.c`, with its measurement).
+- Part K's finding: a warm cache still costs 236 ms a check pack in the
+  1080p video case. B may skip the check pack's build when no source or
+  resource changed (the hook is `dsg_build_check_pack()`; the check thread
+  calls it, one at a time). `check.c` rebuilds the check pack only when
+  the texts or the dirty tables change, and a skip must not keep a pack
+  whose glyph runs are another text's.
+- `dsg_build_result.report`'s issues: places from "line N, column M" as
+  `check.c`'s `place_in_message()` gives them (with the offset), a table's
+  as `dsg_csv_place()` reads them.
+- `build.c` defines only the Build section's functions as external
+  symbols: `build_run_double.c` stands in for the whole file in
+  `test_designer_ui`.
+- Part X's open point: on Windows the pack tool's `run_program()` (ffmpeg)
+  inherits every inheritable handle, so a Build that starts ffmpeg while
+  the designer starts the player can give ffmpeg the log's handle. The fix
+  is in the pack tool (a handle list), not in B.
+
+Part R (`run.c`, `tests/designer/run_test.c`, `tests/designer/fake_player.c`):
+- Every call of the Run section but `run_part.c`'s. `dsg_run_args()`
+  refuses a real run when `YSP_DESIGNER_TEST` is set.
+- Part P's finding: on Windows a `--sim` run cannot be stopped, only
+  killed. `dsg_run_stop()` gives `dsg_proc_stop()`'s 0, and
+  `kill_offered` is then true at once.
+- `rig` `""` gives no `--rig`; a real run then takes `profile.json` when
+  there is one (player/lower.c). Say so in the info, or V offers no "No
+  profile" for a real run when `profile.json` exists (below).
+- `dsg_run_issue()`: `rig` true when the run had `--rig` and the line
+  names the rig.
+- `run.c` defines only the Run section's functions, but
+  `dsg_run_settings_default()` and the part's two (`run_part.c`), as
+  external symbols.
+
+Part G (`rig.c`, the rig's parts of `check.c` and `preview.c`,
+`tests/designer/rig_test.c`):
+- Every call of the rig section, and `dsg_checker_set_rig()` in `check.c`
+  (load at the next check, again on a new name or `dsg_rig_changed()`;
+  `pl_check_desc.rig` and `.cal`; `dsg_report.rig`).
+- Part P's finding: the calibration need goes only when the profile's
+  calibration passed its check and the caller gives it, so
+  `dsg_rig_load()` reads both, and `dsg_rig_cal()` is NULL unless the
+  check is OK.
+- Part P's finding: a profile that binds a role by name refuses every
+  keyboard project with that role name. Set `dsg_issue.rig` on a refusal
+  that the profile causes, for example by a second `pl_check()` with no
+  profile when the first refuses: the Issues panel then names the profile.
+  The profile's own load error or note is `DSG_FROM_RIG` with `rig` true;
+  the panel puts "rig profile 'NAME': " before the message, so the message
+  does not repeat the name.
+- The session (`preview.c`, decision 14): `pv_load()` reads
+  `s->settings.rig` (`""`: the built-in rig), loads it with
+  `dsg_rig_load()`, and gives `pl_sim_desc.rig` and `.cal`; `preview.c`'s
+  `same_settings()` compares `rig`, so a change restarts.
+- Part P2's finding, decided here: the pointer's conversion to counts is
+  G's, in `preview.c`, not V's: `dsg_preview_pointer()` already turns the
+  pane's px into role units there. The preview does not drive a relative
+  role today ("relative: the preview does not capture the mouse"). If G
+  drives one with a profile that has its signal, a sample is the pointer's
+  motion in role units times `dsg_rig_counts_per_unit()`; never role
+  units as counts.
+
+Part V (`view_run.cpp`, the rig's banner in `view_preview.cpp`,
+`tests/designer/te_run.cpp`, `test_designer_ui`'s Run part):
+- The Run view as "The views" says, through `views.h`'s calls and
+  `ui_run_settings()`. V keeps its own `dsg_rig` for the profile's view
+  and summary, and looks at `dsg_rig_changed()` once a second while the
+  view shows; on a change it calls `ui_check_again()` and
+  `dsg_preview_restart()`.
+- Part P's finding: on Windows a `--sim` run shows Kill at once
+  (`kill_offered`), with no Stop that does nothing.
+- Part P's finding: for each `PL_NEED_ROLE_TIER` with a profile chosen,
+  say "the profile gives it no tier" (the need's tier is always UNKNOWN).
+- "No profile (keyboard only)" for a real run when `profile.json` exists
+  would still load it (no `--rig`); do not offer it there, or say so.
+- The preview's combo: the profiles and "Built-in simulated rig" (`""`);
+  the banner from `dsg_rig_summary()`.
+- `test_designer_ui`'s Run part: idle frames 0 while a run goes and
+  nothing changes; at most `DSG_RUN_REDRAW_HZ` frames a second while
+  `trials.csv` grows, through `ui_run_wait_ms()` as `main.cpp` uses it.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release):
+- `test_designer_ui` (182 checks, 68 new), part 0: with no project the
+  toolbar's Build and Run are disabled (ImGui's own word: a mouse sweep
+  along the toolbar reads `HoveredIdIsDisabled` for each item), there is
+  no Stop, and there is a check box for each AUX view, in the views'
+  order. Part 11: with a clean check Build and Run are enabled; a click on
+  Run's check box shows the Run view alone, then under the Preview, and a
+  second click hides it; the part `run` round-trips every setting and each
+  view's `open`, and a part by hand with values out of range (a rig path,
+  a negative seed, a role with a comma, `max_seconds` 0, gains 0 and
+  1e9) reads as the defaults; a change of the rig posts a check. On
+  `build_run_double.c`: Build saves first (the file's bytes are the
+  document's) and posts the saved revision to `PROJECT/build/rdk3.ysppak`;
+  the merged report is the check's issues, then Build's error, then its
+  warning; `n_errors` counts all; Build's error has the path of its place,
+  and a click puts the caret there; Run with a stale pack posts a Build,
+  starts at its result with the player, the Build's pack and a folder
+  under `data/`; while it builds and while a run goes, Build and Run are
+  disabled and Stop shows, Kill does not before a Stop; a real run closes
+  the preview's session and it loads none until the run ends, then it runs
+  again; a simulated run leaves it alone; a wake-up just after a frame is
+  due in 500 ms, and a frame takes it; the run's issue comes last; Quit
+  while a run goes asks, Cancel keeps the project and the run, "Stop the
+  run" stops it, Kill shows, and the quit comes at the run's end.
+- `test_designer_ui_real` (93 checks) runs parts 0 to 8 and the parts of
+  11 that need no double on the library's `build.c` and `run.c`.
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` and `WAYLAND_DISPLAY` unset: 145 of 145; with the Test Engine
+  off: 144 of 144.
+- ASan with UBSan (gcc 12, Debug, built and run under `setarch -R`,
+  `halt_on_error`): the 13 designer tests, no report.
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on every changed C and C++ file: no new warning.
+  emcc (the emsdk's, `-fsyntax-only`) on the designer's core and app
+  files, `main.cpp` too: no warning.
+
+**Hand mutants** (each reverted; each fails `test_designer_ui` at the
+check named):
+
+| Mutant | Fails |
+|---|---|
+| u6-01: Build never disabled | no project: Build disabled |
+| u6-02: Run never disabled | no project: Run disabled |
+| u6-03: one AUX check box (step 5's `break`) | a check box for each AUX view |
+| u6-04: Run disabled when the check is clean | Build and Run enabled |
+| u6-05: Run's check box ticks the Preview | the Run view alone |
+| u6-06: every AUX view stacks, ticked or not | the Run view alone |
+| u6-07: the part `run` not written | the part holds every setting |
+| u6-08: the part `run` not read at an open | reopened: both views and the settings |
+| u6-09: no check on a change of the rig | a change of the rig posts a check |
+| u6-10: Build's issues before the check's | the check's, then Build's |
+| u6-11: the paths of the check's issues only | Build's error has the path of its place |
+| u6-12: Build does not save first | Build saved first |
+| u6-13: `n_errors` the check's only | every error counted |
+| u6-14: Run never builds first | Run posted a Build first |
+| u6-15: a real run keeps the preview | a real run closed the preview's session |
+| u6-16: no preview after the run | the preview's session runs again |
+| u6-17: no wait between run frames | a wake-up just after a frame: due in 500 ms |
+| u6-18: a frame does not take the wake-up | a frame took it |
+| u6-19: the run's issue not merged | the run's issue last |
+| u6-20: Quit does not ask with a run | Quit does not quit at once |
+| u6-21: "Stop the run" goes on at once | the designer waits for the end |
+| u6-22: no going on at the run's end | it quits at the run's end |
+| u6-23: Kill before a Stop | no Kill before a Stop |
+| u6-24: no Stop button | Stop there |
+| u6-25: a simulated run closes the preview | a simulated run leaves the preview alone |
+| u6-26: a Build that goes does not disable Build and Run | while it builds |
+| r-01: a rig name ending in `.json` kept | not kept |
+| r-02: `max_seconds` 0 read | out of range: the defaults |
+| r-03: a role with a comma or `=` read | out of range: the defaults |
+| r-04: a seed with a sign read | out of range: the defaults |
+| r-05: `seed` not written | the part holds every setting |
+| r-06: `gains` not written | the part holds every setting |
+
+**Not done.**
+- The window was not opened: the toolbar, the question, the wake-up's
+  event and the loop's timeout were not seen on a display. `main.cpp`'s
+  changes are compiled only.
+- No process starts in S's tests: the double stands in for `run.c`.
+  The rig's prefix in the Issues panel is drawn by Skribidi, which ImGui's
+  log does not see; no test checks its text.
+- MSVC, MinGW and macOS were not compiled. Locals that a call fills are
+  initialized (C4701).
+- No ThreadSanitizer run: S adds an atomic counter that the watch thread
+  writes and the UI thread reads, and no thread.
+
 ## First version
 
 In:

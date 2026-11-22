@@ -62,6 +62,7 @@ typedef struct check_job {
     size_t          name_off[DSG_MAX_BUFFERS], bytes_off[DSG_MAX_BUFFERS];
     char*           tb;          /* the tables' names and bytes             */
     size_t          tb_n, tb_cap;
+    char            rig[DSG_RIG_NAME];   /* the rig profile's name; "": none */
 } check_job;
 
 typedef struct session_job {
@@ -140,10 +141,12 @@ static void wake_thread(dsg_worker* w) { (void)w; }
 
 /* --- copies into a slot ------------------------------------------------------ */
 
-static int fill_check(check_job* j, const dsg_project* p, const char* text, size_t n, const dsg_doc* d, uint64_t revision) {
+static int fill_check(check_job* j, const dsg_project* p, const char* text, size_t n, const dsg_doc* d, uint64_t revision,
+                      const char* rig) {
     int b;
     size_t at = 0;
     j->revision = revision;
+    snprintf(j->rig, sizeof j->rig, "%s", rig ? rig : "");
     if (grow((void**)&j->text, &j->text_cap, n + 1, 1)) return -1;
     memcpy(j->text, text, n);
     j->text[n] = 0;
@@ -237,6 +240,7 @@ static void run_check(dsg_worker* w) {
     w->forget = false;
     unlock(w);
     if (forget) dsg_checker_forget(w->checker);
+    dsg_checker_set_rig(w->checker, j->rig);
     dsg_check_tables(w->checker, &j->proj, j->text, j->n, j->tables, j->n_tables, &r);
     /* the result's last owner let go of it: its pack goes now */
     dsg_pack_release(o->pub.pack);
@@ -459,9 +463,10 @@ void dsg_worker_stop(dsg_worker* w) {
     free(w);
 }
 
-int dsg_worker_check(dsg_worker* w, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, uint64_t revision) {
+int dsg_worker_check(dsg_worker* w, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, uint64_t revision,
+                     const char* rig) {
     check_job* t;
-    if (fill_check(w->check_stage, p, text, n, tables, revision) != 0) return -1;
+    if (fill_check(w->check_stage, p, text, n, tables, revision, rig) != 0) return -1;
     lock(w);
     t = w->check_wait;
     w->check_wait = w->check_stage;

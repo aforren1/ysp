@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     CHECK(!dsg_worker_take_check(w, &cr), "nothing to take at the start");
 
     /* 1. a result marked with its revision, and a wake-up for it */
-    CHECK(dsg_worker_check(w, &p1, p1.text, p1.text_len, NULL, 7) == 0, "post");
+    CHECK(dsg_worker_check(w, &p1, p1.text, p1.text_len, NULL, 7, NULL) == 0, "post");
     CHECK(dsg_worker_wait(w, kWait) == 0, "the check ran");
     CHECK(dsg_worker_take_check(w, &cr) && cr->revision == 7 && cr->report.status == DSG_CHECK_OK && cr->pack != NULL,
           "the result: revision %llu, status %d", cr ? (unsigned long long)cr->revision : 0ull, cr ? cr->report.status : -9);
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     for (i = 0; i < 10; i++) {
         size_t n = 0;
         char* t = spaced(&p1, i, &n);
-        CHECK(t && dsg_worker_check(w, &p1, t, n, NULL, (uint64_t)(100 + i)) == 0, "post check %d", 100 + i);
+        CHECK(t && dsg_worker_check(w, &p1, t, n, NULL, (uint64_t)(100 + i), NULL) == 0, "post check %d", 100 + i);
         free(t);   /* the post copied it */
     }
     dsg_atomic_add(&h.gate, -1);
@@ -236,13 +236,13 @@ int main(int argc, char** argv) {
     {
         dsg_session* s21 = sr.session;
         const dsg_check_result* c2 = NULL;
-        CHECK(dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 200) == 0, "another project: a rebuild");
+        CHECK(dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 200, NULL) == 0, "another project: a rebuild");
         CHECK(dsg_worker_wait(w, kWait) == 0 && dsg_worker_take_check(w, &c2) && c2->report.built && c2->pack != pk1,
               "the check built a new pack");
         /* three more results rotate every result's slot, so only s21 holds
          * the first pack */
         for (i = 0; i < 3; i++) {
-            dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, (uint64_t)(201 + i));
+            dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, (uint64_t)(201 + i), NULL);
             dsg_worker_wait(w, kWait);
             dsg_worker_take_check(w, &c2);
         }
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
     {
         const dsg_check_result* c3 = NULL;
         dsg_pack* pk2;
-        dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 300);
+        dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 300, NULL);
         dsg_worker_wait(w, kWait);
         CHECK(dsg_worker_take_check(w, &c3) && c3->pack, "a result with the current pack");
         pk2 = c3 ? c3->pack : NULL;
@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
      *    dropped when a newer one arrives */
     {
         const dsg_check_result* c4 = NULL;
-        dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 400);
+        dsg_worker_check(w, &p2, p2.text, p2.text_len, NULL, 400, NULL);
         dsg_worker_wait(w, kWait);
         dsg_worker_take_check(w, &c4);
         dsg_atomic_add(&h.fail_next, 1);
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
         b = d ? dsg_doc_add_buffer(d, DSG_KIND_TABLE, "conditions.csv", tb, tn) : -1;
         /* a table that the player refuses: a column the definition reads is gone */
         CHECK(b > 0 && dsg_doc_replace(d, b, "x,y\n1,2\n", 8, 0) == 0 && dsg_doc_dirty(d, b), "an edited table");
-        CHECK(dsg_worker_check(w, &p1, p1.text, p1.text_len, d, 500) == 0, "posted with the table");
+        CHECK(dsg_worker_check(w, &p1, p1.text, p1.text_len, d, 500, NULL) == 0, "posted with the table");
         /* the document moves on before the thread reads it */
         if (b > 0) dsg_doc_replace(d, b, tb, tn, 0);
         CHECK(dsg_worker_wait(w, kWait) == 0 && dsg_worker_take_check(w, &c5) && c5->revision == 500, "the check with the table ran");
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
     dsg_worker_session(w, p1.text, p1.text_len, NULL, 600, &set);
     wait_in_load(&h, 8);
     dsg_worker_session(w, p1.text, p1.text_len, NULL, 601, &set);
-    dsg_worker_check(w, &p1, p1.text, p1.text_len, NULL, 602);
+    dsg_worker_check(w, &p1, p1.text, p1.text_len, NULL, 602, NULL);
     dsg_atomic_add(&h.gate, -1);
     dsg_worker_stop(w);
     CHECK(h.n_impl == 0, "the stop closed every session (%d open)", (int)h.n_impl);
@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
         CHECK(w2 != NULL, "start without a thread: %s", err);
         if (w2) {
             h.w = w2;
-            dsg_worker_check(w2, &p1, p1.text, p1.text_len, NULL, 700);
+            dsg_worker_check(w2, &p1, p1.text, p1.text_len, NULL, 700, NULL);
             CHECK(!dsg_worker_take_check(w2, &c6), "nothing before the wait");
             dsg_worker_wait(w2, 0);
             CHECK(dsg_worker_take_check(w2, &c6) && c6->revision == 700 && c6->report.status == DSG_CHECK_OK, "the wait ran it");

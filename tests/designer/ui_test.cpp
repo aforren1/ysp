@@ -38,12 +38,27 @@
 //      with the nearest sampler around it; at Fit it is scaled down with no
 //      sampler change and says that fine patterns alias. The cursor over it
 //      reaches the preview in participant px, and leaving it says so.
+//   0, 11. Build and Run (step 6, part S). No project: the toolbar's Build
+//      and Run are disabled, and each AUX view has its check box. A project
+//      with a clean check: both enabled. The Run view's check box shows its
+//      child beside the Preview's or alone; each one's state and the run's
+//      settings round-trip through the view file's part "run", and a part
+//      with values out of range reads as the defaults. A change of the rig
+//      posts a check. On the double of build.c and run.c
+//      (build_run_double.h): the merged report is the check's issues, then
+//      Build's, then the run's, and ui_issue_path() and a click follow that
+//      order; Run with a stale pack saves, builds, then starts the player
+//      with the Build's pack; a real run closes the preview's session until
+//      it ends, a simulated one does not; a run's wake-up brings a frame at
+//      most DSG_RUN_REDRAW_HZ times a second; Quit while a run goes asks,
+//      Cancel keeps both, and "Stop the run" stops it and quits at its end.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
 #include "skf.h"
 #include "skt.h"
 #include "preview_double.h"
+#include "build_run_double.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -246,6 +261,77 @@ static bool same_settings(const dsg_preview_settings& a, const dsg_preview_setti
     return true;
 }
 
+// An item that the mouse hovered on a sweep along a row.
+struct Hit {
+    ImGuiID id;
+    bool disabled;
+    float x;
+};
+
+// Moves the mouse along a row of window w, a frame a step, and lists each
+// item that it hovers, with ImGui's own word on whether it is disabled
+// (ItemHoverable() sets HoveredId for a disabled item too).
+static void sweep(ImGuiWindow* w, float y, ImVector<Hit>* out) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    out->resize(0);
+    const float x0 = w->Pos.x, x1 = w->Pos.x + w->Size.x;
+    for (float x = x0 + 1; x < x1; x += 3) {
+        ImGui::GetIO().AddMousePosEvent(x, y);
+        frame();
+        if (g.HoveredId && (out->Size == 0 || out->back().id != g.HoveredId)) out->push_back(Hit{ g.HoveredId, g.HoveredIdIsDisabled, x });
+    }
+    ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    frame();
+}
+
+// The toolbar is the main window's first row.
+static void sweep_toolbar(ImVector<Hit>* out) {
+    ImGuiWindow* top = ImGui::FindWindowByName("##designer");
+    out->resize(0);
+    if (top) sweep(top, top->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f, out);
+}
+
+// The ID of label in an ID scope of the main window ("tool", "aux").
+static ImGuiID scoped_id(const char* scope, const char* label) {
+    ImGuiWindow* top = ImGui::FindWindowByName("##designer");
+    return top ? ImHashStr(label, 0, ImHashStr(scope, 0, top->ID)) : 0;
+}
+
+static const Hit* find_hit(const ImVector<Hit>& h, ImGuiID id) {
+    for (const Hit& x : h)
+        if (x.id == id) return &x;
+    return nullptr;
+}
+
+static void click(float x, float y) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(x, y);
+    io.AddMouseButtonEvent(0, true);
+    io.AddMouseButtonEvent(0, false);
+    settle();
+    io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    frame();
+}
+
+// A modal's button row (its last row) by the button's label: clicked.
+static bool click_modal(const char* modal, const char* label) {
+    ImGuiWindow* w = ImGui::FindWindowByName(modal);
+    if (!w || !w->Active) return false;
+    ImVector<Hit> h;
+    const float y = w->DC.CursorPosPrevLine.y + w->DC.PrevLineSize.y * 0.5f;
+    const ImGuiID id = ImHashStr(label, 0, w->ID);
+    sweep(w, y, &h);
+    const Hit* b = find_hit(h, id);
+    if (!b) return false;
+    click(b->x + 2, y);
+    return true;
+}
+
+static bool modal_open(const char* modal) {
+    ImGuiWindow* w = ImGui::FindWindowByName(modal);
+    return w && w->Active;
+}
+
 static const char* editor_text(size_t* n) {
     static ImVector<char> buf;
     *n = (size_t)skf_text(ui_editor(), &buf);
@@ -274,12 +360,29 @@ int main(int argc, char** argv) {
     io.ConfigMacOSXBehaviors = false;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
     UiPlatform plat = { nullptr, no_dialog, on_title, nullptr };
+    // never started: the double of run.c records the argv (part 11)
+    plat.player_path = "/nonexistent/ysp_player";
     if (!ui_init(YSP_DESIGNER_FONT_DIR, &plat, err, sizeof err)) {
         printf("FAIL: ui_init: %s\n", err);
         return 1;
     }
     settle();
     CHECK(ui_project() == nullptr && strstr(ui_status(), "Open a project"), "no project at start: '%s'", ui_status());
+
+    // 0. no project: Build and Run disabled; a check box per AUX view
+    {
+        ImVector<Hit> h;
+        sweep_toolbar(&h);
+        const Hit* b = find_hit(h, scoped_id("tool", "Build"));
+        const Hit* r = find_hit(h, scoped_id("tool", "Run"));
+        CHECK(b && b->disabled, "no project: the toolbar's Build is there, disabled (%s)", b ? "enabled" : "missing");
+        CHECK(r && r->disabled, "no project: the toolbar's Run is there, disabled (%s)", r ? "enabled" : "missing");
+        CHECK(find_hit(h, scoped_id("tool", "Stop")) == nullptr, "no run: no Stop");
+        const Hit* ap = find_hit(h, scoped_id("aux", "Preview"));
+        const Hit* ar = find_hit(h, scoped_id("aux", "Run"));
+        CHECK(ap && !ap->disabled && ar && !ar->disabled && ap->x < ar->x, "a check box for each AUX view, in the views' order");
+        CHECK(!ui_can_build() && !ui_can_run() && !ui_build() && !ui_run_start(), "and the calls refuse too: '%s'", ui_status());
+    }
 
     // 1. the dialog fails; the typed path opens the project
     ui_dialog_failed("test");
@@ -704,6 +807,251 @@ int main(int argc, char** argv) {
         pvd_enable(false);
     }
 #endif
+
+    // 11. Build and Run (step 6, part S). A fresh project, saved: clean.
+    {
+        char dir3[DSG_PATH_MAX];
+        CHECK(project(work, "rdk3", dir3, sizeof dir3), "the third project");
+        if (ui_dirty()) ui_save();
+        ui_open(dir3);
+        settle();
+        CHECK(ui_project() && strcmp(ui_project()->folder, dir3) == 0, "the third project opened: '%s'", ui_status());
+        CHECK(ui_save(), "saved: '%s'", ui_status());
+        settle();
+        const dsg_report* rr = ui_report();
+        CHECK(rr && rr->status == DSG_CHECK_OK && rr->n_errors == 0, "a clean check");
+        ImVector<Hit> h;
+        sweep_toolbar(&h);
+        const Hit* b = find_hit(h, scoped_id("tool", "Build"));
+        const Hit* r = find_hit(h, scoped_id("tool", "Run"));
+        CHECK(b && !b->disabled && r && !r->disabled, "a project with a clean check: Build and Run enabled");
+
+        // the AUX check boxes: Run's shows the Run view, alone or under the Preview
+        ui_show_aux(false);
+        settle();
+        CHECK(!child_drawn("Run") && !child_drawn("Preview") && !ui_aux_view_open("run"), "both AUX views hidden at the open");
+        const Hit* ar = find_hit(h, scoped_id("aux", "Run"));
+        ImGuiWindow* top = ImGui::FindWindowByName("##designer");
+        const float ty = top ? top->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f : 0;
+        if (ar) click(ar->x + 2, ty);
+        CHECK(ui_aux_view_open("run") && child_drawn("Run") && !child_drawn("Preview") && !ui_aux_open(),
+              "a click on Run's check box shows the Run view alone");
+        CHECK(child_drawn("Definition") && child_drawn("Properties"), "beside the main view and the side column");
+        ui_show_aux(true);
+        settle();
+        ImGuiWindow* wp = nullptr;
+        ImGuiWindow* wr = nullptr;
+        for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows) {
+            if (!top || w->ParentWindow != top || !w->Active) continue;
+            if (w->ChildId == ImHashStr("Preview", 0, top->ID)) wp = w;
+            if (w->ChildId == ImHashStr("Run", 0, top->ID)) wr = w;
+        }
+        CHECK(wp && wr && wr->Pos.y > wp->Pos.y && fabsf(wr->Pos.x - wp->Pos.x) < 1, "both: the Run view stacks under the Preview");
+        if (ar) click(ar->x + 2, ty);
+        CHECK(!ui_aux_view_open("run") && !child_drawn("Run") && child_drawn("Preview"), "a second click hides Run; the Preview stays");
+        ui_show_aux_view("run", true);
+
+        // the run's settings and the view state through the part "run"
+        dsg_run_settings* rs = ui_run_settings();
+        snprintf(rs->rig, sizeof rs->rig, "lab2");
+        rs->sim = true;
+        snprintf(rs->participant, sizeof rs->participant, "p=0.8");
+        rs->n_fields = 1;
+        snprintf(rs->fields[0].name, sizeof rs->fields[0].name, "participant");
+        snprintf(rs->fields[0].value, sizeof rs->fields[0].value, "s07");
+        snprintf(rs->seed, sizeof rs->seed, "18446744073709551615");
+        rs->n_below = 2;
+        snprintf(rs->allow_below_tier[0], sizeof rs->allow_below_tier[0], "resp");
+        snprintf(rs->allow_below_tier[1], sizeof rs->allow_below_tier[1], "trig");
+        rs->windowed = true;
+        rs->max_seconds = 30;
+        rs->n_gains = 1;
+        snprintf(rs->gains[0].role, sizeof rs->gains[0].role, "hand");
+        rs->gains[0].units = 0.25;
+        const int c0 = ui_checks_run();
+        settle();
+        CHECK(ui_checks_run() > c0, "a change of the rig posts a check (%d)", ui_checks_run() - c0);
+        const dsg_run_settings want_rs = *rs;
+        CHECK(ui_save(), "saved with both views: '%s'", ui_status());
+        dsg_view v3;
+        memset(&v3, 0, sizeof v3);
+        CHECK(dsg_view_read(dir3, &v3, err, sizeof err) == 0, "the view file reads: %s", err);
+        dsg_run_settings got_rs = {};
+        bool ropen = false;
+        dsg_run_part_read(&v3, &got_rs, &ropen);
+        bool same = ropen && strcmp(got_rs.rig, "lab2") == 0 && got_rs.sim && strcmp(got_rs.participant, "p=0.8") == 0 &&
+                    got_rs.n_fields == 1 && strcmp(got_rs.fields[0].value, "s07") == 0 && strcmp(got_rs.seed, "18446744073709551615") == 0 &&
+                    got_rs.n_below == 2 && strcmp(got_rs.allow_below_tier[1], "trig") == 0 && got_rs.windowed && got_rs.max_seconds == 30 &&
+                    got_rs.n_gains == 1 && strcmp(got_rs.gains[0].role, "hand") == 0 && got_rs.gains[0].units == 0.25;
+        CHECK(same, "the part holds the Run view's state and every setting");
+        bool popen = false;
+        dsg_preview_settings pps = {};
+        dsg_preview_part_read(&v3, &pps, &popen);
+        CHECK(popen, "and the part preview its own");
+        dsg_view_free(&v3);
+        // another project and back: as they were
+        ui_open(dir);
+        settle();
+        CHECK(!ui_aux_view_open("run") && ui_run_settings()->rig[0] == 0 && !ui_run_settings()->sim, "the other project: hidden, defaults");
+        ui_open(dir3);
+        settle();
+        rs = ui_run_settings();
+        CHECK(ui_aux_view_open("run") && ui_aux_open() && strcmp(rs->rig, "lab2") == 0 && rs->max_seconds == 30 && rs->n_gains == 1,
+              "reopened: both views and the settings");
+        (void)want_rs;
+        // by hand, out of range: each key its default
+        {
+            dsg_view hv;
+            memset(&hv, 0, sizeof hv);
+            static const char bad[] = "{\"open\":1,\"rig\":\"../x\",\"sim\":\"yes\",\"participant\":7,\"fields\":{\"a=b\":\"1\",\"c\":2},"
+                                      "\"seed\":\"-4\",\"allow_below_tier\":[\"a,b\",\"\",3],\"windowed\":0,\"max_seconds\":0,"
+                                      "\"gains\":{\"hand\":0,\"x=y\":1,\"g\":1e9}}";
+            CHECK(dsg_view_part_set(&hv, "run", bad, sizeof bad - 1) == 0, "a run part by hand");
+            dsg_run_settings d = {}, z = {};
+            dsg_run_settings_default(&z);
+            bool o = true;
+            dsg_run_part_read(&hv, &d, &o);
+            CHECK(!o && memcmp(&d, &z, sizeof d) == 0, "out of range: the defaults");
+            static const char rig2[] = "{\"rig\":\"lab.json\"}";
+            dsg_view_part_set(&hv, "run", nullptr, 0);
+            dsg_view_part_set(&hv, "run", rig2, sizeof rig2 - 1);
+            dsg_run_part_read(&hv, &d, &o);
+            CHECK(d.rig[0] == 0, "a rig name that the player reads as a file is not kept");
+            dsg_view_free(&hv);
+        }
+        snprintf(rs->rig, sizeof rs->rig, "%s", "");
+        rs->sim = false;
+        settle();
+
+#if DSG_BUILD_RUN_DOUBLE
+        // the merged report: the check's, then Build's, then the run's
+        brd_reset();
+        brd_build_script(DSG_BUILD_FAILED, 1, 1);
+        CHECK(dsg_def_set_string(ui_doc(), "/name", "merged") == 0, "an edit: %s", dsg_doc_error(ui_doc()));
+        settle();
+        CHECK(ui_dirty() && ui_build(), "Build with unsaved edits: '%s'", ui_status());
+        CHECK(!ui_dirty() && brd_build_posts() == 1, "Build saved first, then posted");
+        size_t dn = 0, fn = 0;
+        const char* db = ui_text(&dn);
+        char* fb = nullptr;
+        CHECK(dsg_read_file(ui_project()->def_path, &fb, &fn, err, sizeof err) == 0 && fn == dn && memcmp(fb, db, dn) == 0,
+              "the file's bytes are the document's");
+        free(fb);
+        CHECK(brd_build_revision() == dsg_doc_revision(ui_doc()), "the post has the saved revision");
+        char bp[DSG_PATH_MAX];
+        snprintf(bp, sizeof bp, "%s/build/rdk3.ysppak", dir3);
+        CHECK(strcmp(brd_build_out(), bp) == 0, "the pack goes to %s: %s", bp, brd_build_out());
+        settle();
+        const dsg_report* m = ui_report();
+        int nc = 0;
+        while (m && nc < m->n_issues && m->issues[nc].from != DSG_FROM_BUILD) nc++;
+        CHECK(m && nc + 2 == m->n_issues && m->issues[nc].severity == DSG_SEV_ERROR && strcmp(m->issues[nc].message, "build error 0") == 0 &&
+                  m->issues[nc + 1].severity == DSG_SEV_WARNING && m->issues[nc + 1].from == DSG_FROM_BUILD,
+              "the check's issues, then Build's error, then its warning (%d of %d)", nc, m ? m->n_issues : 0);
+        int ne = 0;
+        for (int i = 0; m && i < m->n_issues; i++) ne += m->issues[i].severity == DSG_SEV_ERROR;
+        CHECK(m && m->n_errors == ne && ne == 1 && m->status == DSG_CHECK_OK, "the check's status; every error counted (%d)", ne);
+        CHECK(ui_build_last() && ui_build_last()->status == DSG_BUILD_FAILED, "the last Build");
+        CHECK(ui_can_run(), "Run follows the check, not the failed Build");
+        {
+            // Build's error at line 2, column 3: its path and the caret
+            size_t tn = 0;
+            const char* tt = ui_text(&tn);
+            const uint32_t off = dsg_offset_of(tt, tn, 2, 3);
+            char want[DSG_SEL_PATH] = "";
+            CHECK(dsg_path_at(dsg_doc_root(ui_doc()), off, want, sizeof want) == 0 && strcmp(ui_issue_path(nc), want) == 0,
+                  "Build's error has the path of its place: '%s', want '%s'", ui_issue_path(nc), want);
+            ui_jump_to_issue(nc);
+            settle();
+            CHECK(skf_caret(ui_editor()) == (int)dsg_codepoints_before(tt, tn, off), "a click on it puts the caret at its place");
+        }
+
+        // Run with a stale pack: Build first, then the player with the pack
+        brd_build_script(DSG_BUILD_OK, 0, 1);
+        CHECK(ui_can_run() && ui_build_stale(), "Run enabled; the pack is stale (the Build failed)");
+#if DSG_PREVIEW_DOUBLE
+        pvd_enable(true);
+        ui_show_aux(true);
+        CHECK(dsg_def_set_string(ui_doc(), "/name", "runs") == 0, "an edit for the preview");
+        frames(40);
+        CHECK(pv_info().status == DSG_PV_RUNNING, "the preview's session runs (%d)", pv_info().status);
+        CHECK(ui_save(), "saved");
+        settle();
+#endif
+        const int posts = brd_build_posts();
+        CHECK(ui_run_start() && brd_build_posts() == posts + 1 && brd_run_starts() == 0, "Run posted a Build first: '%s'", ui_status());
+        CHECK(!ui_can_build() && !ui_can_run(), "while it builds, Build and Run are disabled");
+        frame();
+        CHECK(brd_run_starts() == 1 && ui_run_active(), "at the Build's result the run started: '%s'", ui_status());
+        CHECK(brd_run_arg(0) && strcmp(brd_run_arg(0), "/nonexistent/ysp_player") == 0 && brd_run_arg(1) && strcmp(brd_run_arg(1), bp) == 0 &&
+                  brd_run_arg(3) && strstr(brd_run_arg(3), "/data/"),
+              "the player, the Build's pack, the output folder");
+        CHECK(!brd_run_sim(), "a real run");
+        m = ui_report();
+        CHECK(m && m->n_issues > 0 && m->issues[m->n_issues - 1].from == DSG_FROM_BUILD, "Build's warning is last");
+#if DSG_PREVIEW_DOUBLE
+        CHECK(pv_info().status == DSG_PV_NONE, "a real run closed the preview's session");
+        const int pp = pvd_posts();
+        frames(40);
+        CHECK(pvd_posts() == pp && pv_info().status == DSG_PV_NONE, "and it loads none while the run goes");
+#endif
+        sweep_toolbar(&h);
+        b = find_hit(h, scoped_id("tool", "Build"));
+        r = find_hit(h, scoped_id("tool", "Run"));
+        const Hit* st = find_hit(h, scoped_id("tool", "Stop"));
+        CHECK(b && b->disabled && r && r->disabled && st && !st->disabled, "a run goes: Build and Run disabled, Stop there");
+        CHECK(find_hit(h, scoped_id("tool", "Kill")) == nullptr, "no Kill before a Stop");
+
+        // the redraw rate: a wake-up brings a frame, at most 2 a second
+        frame();
+        CHECK(ui_run_wait_ms() < 0, "no wake-up: no frame due");
+        brd_run_wake();
+        const int wms = ui_run_wait_ms();
+        CHECK(wms > 1000 / DSG_RUN_REDRAW_HZ - 50 && wms <= 1000 / DSG_RUN_REDRAW_HZ, "a wake-up just after a frame: due in %d ms", wms);
+        frames(31);   // 0.52 s of frames, each takes the progress
+        CHECK(ui_run_wait_ms() < 0, "a frame took it");
+
+        // the run ends: its issue is last, the preview comes back
+        brd_run_issue_rig(true);
+        brd_run_end(1, "refused: role 'resp' is not bound");
+        frame();
+        m = ui_report();
+        CHECK(!ui_run_active() && m && m->n_issues > 1 && m->issues[m->n_issues - 1].from == DSG_FROM_PLAYER_RUN &&
+                  strstr(m->issues[m->n_issues - 1].message, "role 'resp'") && m->issues[m->n_issues - 2].from == DSG_FROM_BUILD,
+              "ended: the check's, Build's, then the run's issue");
+        CHECK(strstr(ui_status(), "exit 1") != nullptr, "the status says how it ended: '%s'", ui_status());
+#if DSG_PREVIEW_DOUBLE
+        frames(40);
+        CHECK(pvd_posts() > pp && pv_info().status == DSG_PV_RUNNING, "the preview's session runs again (%d posts)", pvd_posts() - pp);
+#endif
+        CHECK(ui_can_run() && !ui_build_stale(), "Run enabled again; the pack is up to date");
+
+        // a simulated run keeps the preview; Quit asks while it goes
+        rs->sim = true;
+        CHECK(ui_run_start() && brd_run_starts() == 2 && brd_build_posts() == posts + 1, "an up-to-date pack: Run starts at once");
+        CHECK(brd_run_sim(), "simulated");
+#if DSG_PREVIEW_DOUBLE
+        frame();
+        CHECK(pv_info().status == DSG_PV_RUNNING, "a simulated run leaves the preview alone");
+        pvd_enable(false);
+#endif
+        CHECK(!ui_request_quit(), "Quit while a run goes does not quit at once");
+        settle();
+        CHECK(modal_open("A run goes"), "it asks");
+        CHECK(click_modal("A run goes", "Cancel") && !modal_open("A run goes") && ui_project() && ui_run_active(),
+              "Cancel: the project and the run stay");
+        const int stops = brd_run_stops();
+        CHECK(!ui_request_quit(), "Quit again");
+        settle();
+        CHECK(click_modal("A run goes", "Stop the run") && brd_run_stops() == stops + 1 && ui_project() != nullptr,
+              "Stop the run: a Stop, and the designer waits for the end");
+        sweep_toolbar(&h);
+        CHECK(find_hit(h, scoped_id("tool", "Kill")) != nullptr, "after a Stop, Kill shows");
+        brd_run_end(3, nullptr);
+        settle();
+        CHECK(ui_project() == nullptr && !ui_run_active(), "at the run's end it quits (the project closed)");
+#endif
+    }
 
     ui_shutdown();
     ImGui::DestroyContext();

@@ -39,6 +39,9 @@ struct dsg_checker {
     uint8_t      failed_text[32];
     bool         have_failed;
     char         failed_msg[1024];
+    /* Step 6: the rig profile of the next checks (dsg_checker_set_rig());
+     * part G loads it and gives it to pl_check_desc */
+    char         rig_name[DSG_RIG_NAME];
     /* the report */
     dsg_issue*   issues;
     size_t*      msg_off;       /* into strs, until the report is final      */
@@ -111,6 +114,10 @@ void dsg_checker_forget(dsg_checker* c) {
     c->have_failed = false;
     c->folder[0] = 0;
 }
+
+/* Part S's stub: the name is kept and the check runs with no profile, as
+ * before step 6. Part G loads the profile here (dsg_rig_load()). */
+void dsg_checker_set_rig(dsg_checker* c, const char* name) { snprintf(c->rig_name, sizeof c->rig_name, "%s", name ? name : ""); }
 
 void dsg_checker_free(dsg_checker* c) {
     if (!c) return;
@@ -415,7 +422,6 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     size_t dlen = 0;
     char* bytes = NULL;
     size_t blen = 0;
-    ypt_options o;
     int rc, i;
     uint8_t key[32];
     dsg_pack* pk;
@@ -439,8 +445,8 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     }
     desc = check_description(p, tables, &dlen, err, cap);
     if (!desc) return -1;
-    memset(&o, 0, sizeof o);
-    rc = ypt_build_text(desc, dlen, p->folder, pack, &o, err, cap);
+    /* Build's file (part B): the entry cache, decision 17 */
+    rc = dsg_build_check_pack(p, desc, dlen, pack, err, cap);
     free(desc);
     if (rc != 0) return -1;
     if (dsg_read_file(pack, &bytes, &blen, err, cap)) return -1;

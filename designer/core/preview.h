@@ -90,7 +90,7 @@ void dsg_preview_settings_default(dsg_preview_settings* s);
 /* The view file's part "preview" (preview_part.c, part S): {"open": bool,
  * "display": [w, h], "hz": n, "speed": s, "seed": n, "participant": "...",
  * "rt_s": s, "pin": {"leaf": PATH, "row": n}, "fields": {NAME: "VALUE"},
- * "scale": "fit" or "1:1"}. A key that is missing, of another type or out of
+ * "scale": "fit" or "1:1", "rig": NAME (step 6; "": the built-in rig)}. A key that is missing, of another type or out of
  * range takes its default, and so does every key when the part is missing
  * or does not parse. open: the pane is shown. */
 void dsg_preview_part_read(const dsg_view* v, dsg_preview_settings* s, bool* open);
@@ -153,7 +153,8 @@ void dsg_preview_step(dsg_preview* pv);
 /* A session job with the same settings now, without the settle. */
 void dsg_preview_restart(dsg_preview* pv);
 /* New settings. A change of the display, seed, participant, rt, pin or
- * fields restarts; speed and scale take effect at once. */
+ * fields restarts; speed and scale take effect at once. Step 6: a change of
+ * session.rig restarts too (part G, in preview.c's same_settings()). */
 void dsg_preview_set(dsg_preview* pv, const dsg_preview_settings* s);
 void dsg_preview_get(const dsg_preview* pv, dsg_preview_settings* out);
 /* Pins the first leaf of the shown definition's timeline that runs template

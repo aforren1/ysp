@@ -374,14 +374,14 @@ static void bench_worker(const char* name, const dsg_project* p, const char* nee
         goto out;
     }
     /* the first check builds the thread's own pack */
-    dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++);
+    dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++, NULL);
     dsg_worker_wait(w, 600000000000LL);
     dsg_worker_take_check(w, &cr);
     for (i = 0; i < checks; i++) {
         double t0, t1, t2;
         t0 = now_us();
-        if (i & 1) dsg_worker_check(w, p, spaced, sn, NULL, rev++);
-        else dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++);
+        if (i & 1) dsg_worker_check(w, p, spaced, sn, NULL, rev++, NULL);
+        else dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++, NULL);
         t1 = now_us();
         dsg_worker_wait(w, 600000000000LL);
         t[i] = t1 - t0;
@@ -399,7 +399,7 @@ static void bench_worker(const char* name, const dsg_project* p, const char* nee
         /* one check builds the pack with the table; the rest only post it */
         for (i = 0; i < checks; i++) {
             double t0 = now_us();
-            dsg_worker_check(w, p, p->text, p->text_len, d, rev++);
+            dsg_worker_check(w, p, p->text, p->text_len, d, rev++, NULL);
             t[i] = now_us() - t0;
             dsg_worker_wait(w, 600000000000LL);
             dsg_worker_take_check(w, &cr);
@@ -416,7 +416,7 @@ static void bench_worker(const char* name, const dsg_project* p, const char* nee
             double t0;
             if (!e) break;
             t0 = now_us();
-            dsg_worker_check(w, p, e, en, NULL, rev++);
+            dsg_worker_check(w, p, e, en, NULL, rev++, NULL);
             free(e);
             dsg_worker_wait(w, 600000000000LL);
             lat[i] = g_woke_us - t0;
