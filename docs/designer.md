@@ -3353,8 +3353,8 @@ place and puts the caret there.
 ## Plan of step 6
 
 Status: planned 2026-11-21 on branch `designer-step6-plan`, from
-`step5-int2` at `f8908c7`. Nothing is built. The decisions below wait for
-the user. This section answers, from the code at `f8908c7`, what Build and
+`step5-int2` at `f8908c7`. The user accepted decisions 1 to 17 on
+2026-11-22 (17 was added that day). Nothing is built yet. This section answers, from the code at `f8908c7`, what Build and
 Run need from the pack tool, the player, ysp/rigfile.h and the OS, and
 gives the decisions, the shared interfaces, the parts, the tests, the
 measurements and the order of merges.
@@ -3480,6 +3480,16 @@ from "Measured", below.
 16. **Web.** Run is not built for WebAssembly. Build in the browser (a
     download of the pack) goes to step 7 with the rest of the web build;
     step 6 keeps the web build compiling with stubs.
+17. **An entry cache for derived media** (added 2026-11-22). The check
+    pack re-encodes a video at each text change: 3.6 s with no check
+    result for the 1080p case ("The check pack and a video"). The pack
+    tool gets an entry cache (part K): a derived entry is reused when its
+    key (the source's bytes, the derivation's options and the tool's
+    version) matches. The designer keeps it in `.designer/cache/entries`,
+    shared by the check pack and Build (part B). Part K measures the key's
+    cost (hash of the source, or size and time first) and the hit's cost
+    on the 1080p case, and the pack bytes with and without the cache must
+    be equal.
 
 ### What the code allows today
 
@@ -3537,10 +3547,10 @@ differs from Build's stamp.
 pack is built from the whole description, so a project with a video
 re-encodes the video at each check pack build: at the first check and at
 each keystroke that changes a text. On the check thread that is seconds
-(3.6 s for the 1080p case here) in which no check result comes. Not
-fixed by step 6; the fix is an entry cache keyed by the source's hash and
-the derivation, or a check pack that leaves out the video entries the
-check does not read. It goes to "Risks" and needs its own measurement.
+(3.6 s for the 1080p case here) in which no check result comes. The
+fix is an entry cache keyed by the source's hash and the derivation
+(decision 17, parts K and B). A check pack that leaves out the video
+entries does not serve: the preview draws the videos from it.
 
 **The build thread.** A second `yrt_pump`, as part T's: SCHED_OTHER with
 explicit attributes, never elevated, blocks when idle. One job at a time;
@@ -3798,10 +3808,10 @@ bool, "max_seconds": s}`.
 | Files | Owner |
 |---|---|
 | `player/main.c` (`--version`, the `--sim` signal handler), `player/player.h` and `lower.c` (`pl_check_desc.rig`), `run.c` (the stop flag), `tests/player/check_test.c`, `player_test.py`; the player's mutation lists; `docs/player.md`; `docs/status.md` | P (player 0.18.0) |
-| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` (`ypt_options.cancel`), `tests/pack/tool_test.c`, `docs/pack.md`, `docs/status.md` | K (pack tool 0.12.0) |
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` (`ypt_options.cancel`, the entry cache of decision 17), `tests/pack/tool_test.c`, `docs/pack.md`, `docs/status.md` | K (pack tool 0.12.0) |
 | `designer/core/platform.c` (`dsg_proc_*`), `tests/designer/platform_test.c` (the process part), `tests/designer/test_child.c` (new: a child that prints, waits, exits with a code, ignores or takes SIGTERM, lists its descriptors and its policy) | X (the process) |
 | `designer/core/dsg.h`, `views.h`, `ui.h`, `ui.cpp` (toolbar, AUX check boxes, the merged report, the Run state), `main.cpp` (the player's path, the quit question), `views.cpp`, `designer/CMakeLists.txt` (`ysp_player` beside the designer; `test_child`); stubs of B, R, G and V; `preview_part.c`'s `run` sibling (`run_part.c`) | Shared (S): frozen during step 6, after wave 1 |
-| `designer/core/build.c` (new), `tests/designer/build_test.c` (new) | B (Build) |
+| `designer/core/build.c` (new), the check pack's use of the entry cache in `check.c` (decision 17), `tests/designer/build_test.c` (new) | B (Build) |
 | `designer/core/run.c` (new), `tests/designer/run_test.c` (new), `tests/designer/fake_player.c` (new) | R (Run) |
 | `designer/core/rig.c` (new), the rig's parts of `check.c`, `worker.c` and `preview.c`, `tests/designer/rig_test.c` (new) | G (rig profiles) |
 | `designer/app/view_run.cpp` (new), `designer/app/view_preview.cpp` (the rig's banner), `tests/designer/te_run.cpp` (new), `test_designer_ui`'s Run part | V (the views) |
