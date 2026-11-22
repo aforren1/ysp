@@ -41,6 +41,7 @@ const char* brd_build_out(void);         /* the last post's out_path         */
 int  brd_run_starts(void);
 const char* brd_run_arg(int i);
 bool brd_run_sim(void);                  /* the last start's desc.sim        */
+const char* brd_run_cwd(void);           /* its desc.cwd; NULL: none         */
 int  brd_run_stops(void);
 int  brd_run_kills(void);
 /* The last run ends at its next tick with this status; issue: its message

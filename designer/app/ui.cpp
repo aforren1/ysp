@@ -525,6 +525,32 @@ void run_wake(void* ctx) {
     if (p->wake_run) p->wake_run(p->ctx);
 }
 
+// The next run's output folder when the settings name none: decision 11's
+// name, or with -2, -3, ... -99 after it when a run in the same second took
+// it (R's name has whole seconds, and the player and dsg_run_start() refuse
+// a folder or a log DIR.log that exists). 0, or -1 with the reason in why.
+int next_out_dir(int64_t now_unix_s, char* out, size_t cap, char* why, size_t why_cap) {
+    char base[DSG_PATH_MAX], log[DSG_PATH_MAX + 8];
+    why[0] = 0;
+    if (!S->open || dsg_run_out_dir(S->proj.folder, &S->run_set, now_unix_s, base, sizeof base)) {
+        snprintf(why, why_cap, "the output folder's path is too long");
+        return -1;
+    }
+    for (int k = 1; k <= 99; k++) {
+        const int n = k == 1 ? snprintf(out, cap, "%s", base) : snprintf(out, cap, "%s-%d", base, k);
+        if (n < 0 || (size_t)n >= cap) break;
+        snprintf(log, sizeof log, "%s.log", out);
+        if (!dsg_is_dir(out) && !dsg_is_file(out) && !dsg_is_dir(log) && !dsg_is_file(log)) return 0;
+    }
+    snprintf(why, why_cap, "%s and the names -2 to -99 after it exist", base);
+    return -1;
+}
+
+// A path that does not depend on the working folder (POSIX, a drive, UNC).
+bool is_absolute(const char* p) {
+    return p[0] == '/' || p[0] == '\\' || (p[0] && p[1] == ':');
+}
+
 // Starts the player with the last Build's pack.
 bool start_run() {
     char out_dir[DSG_PATH_MAX], tmp[DSG_PATH_MAX], err[1024] = "";
@@ -537,8 +563,8 @@ bool start_run() {
         return false;
     }
     if (S->run_set.out_dir[0]) snprintf(out_dir, sizeof out_dir, "%s", S->run_set.out_dir);
-    else if (dsg_run_out_dir(S->proj.folder, &S->run_set, (int64_t)time(nullptr), out_dir, sizeof out_dir)) {
-        set_status("Not run: no output folder (the path is too long, or Run is not built).");
+    else if (next_out_dir((int64_t)time(nullptr), out_dir, sizeof out_dir, err, sizeof err)) {
+        set_status("Not run: %s.", err);
         return false;
     }
     // the player refuses a folder that exists (decision 11): say so first
@@ -561,7 +587,10 @@ bool start_run() {
     }
     dsg_run_desc d = {};
     d.argv = S->argv.argv;
-    d.cwd = S->proj.folder;
+    // The project's folder, as the plan says; but a project opened by a
+    // relative path has a relative pack and output folder, which hold only
+    // from the designer's own working folder: the player starts there.
+    d.cwd = is_absolute(S->proj.folder) ? S->proj.folder : nullptr;
     d.out_dir = out_dir;
     d.tmp_dir = tmp;
     d.sim = S->run_set.sim;
@@ -1469,6 +1498,13 @@ void ui_run_kill() {
 }
 
 const dsg_run* ui_run() { return S ? S->run : nullptr; }
+
+bool ui_run_next_out_dir(char* out, size_t cap) {
+    char why[DSG_PATH_MAX + 64];
+    if (!S || !S->open) return false;
+    if (S->run_set.out_dir[0]) return snprintf(out, cap, "%s", S->run_set.out_dir) < (int)cap;
+    return next_out_dir((int64_t)time(nullptr), out, cap, why, sizeof why) == 0;
+}
 
 dsg_run_settings* ui_run_settings() { return &S->run_set; }
 

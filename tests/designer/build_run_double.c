@@ -31,6 +31,8 @@ static struct {
     int argc;
     bool sim;
     bool issue_rig;
+    char cwd[DSG_PATH_MAX];
+    bool has_cwd;
 } B;
 
 struct dsg_builder {
@@ -68,6 +70,7 @@ const char* brd_build_out(void) { return B.out; }
 int brd_run_starts(void) { return B.starts; }
 const char* brd_run_arg(int i) { return i >= 0 && i < B.argc ? B.argv[i] : NULL; }
 bool brd_run_sim(void) { return B.sim; }
+const char* brd_run_cwd(void) { return B.has_cwd ? B.cwd : NULL; }
 int brd_run_stops(void) { return B.stops; }
 int brd_run_kills(void) { return B.kills; }
 void brd_run_issue_rig(bool rig) { B.issue_rig = rig; }
@@ -260,6 +263,8 @@ int dsg_run_start(dsg_run** out, const dsg_run_desc* d, char* err, size_t cap) {
     r->desc.out_dir = r->out_dir;
     B.starts++;
     B.sim = d->sim;
+    B.has_cwd = d->cwd != NULL;
+    snprintf(B.cwd, sizeof B.cwd, "%s", d->cwd ? d->cwd : "");
     for (B.argc = 0, i = 0; i < DSG_RUN_ARGV && d->argv[i]; i++) snprintf(B.argv[B.argc++], sizeof B.argv[0], "%s", d->argv[i]);
     g_run = r;
     *out = r;

@@ -634,9 +634,8 @@ void settings_section(dsg_run_settings* rs) {
     tier_rows(rs);
 
     // the output folder (decision 11): the player refuses one that exists
-    const dsg_project* pj = ui_project();
     char def[DSG_PATH_MAX] = "";
-    if (pj && dsg_run_out_dir(pj->folder, rs, (int64_t)time(nullptr), def, sizeof def)) def[0] = 0;
+    if (!ui_run_next_out_dir(def, sizeof def)) def[0] = 0;
     ImGui::TextDisabled("Output folder");
     if (!editing("##out_dir")) snprintf(V.out_dir, sizeof V.out_dir, "%s", rs->out_dir);
     ImGui::SetNextItemWidth(-FLT_MIN);

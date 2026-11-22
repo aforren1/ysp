@@ -63,6 +63,13 @@
 //      own: the check and a real run take "profile" (the player with no
 //      --rig loads profile.json); a simulated run and its check take none;
 //      with profile.json gone, the check takes none again.
+//  14. The output folder (the integration of step 6), on
+//      build_run_double.c: a second Run in the same second gets the name
+//      with -2 (here -3: the -2's log is there too), and a Run when every
+//      name up to -99 exists is refused with a message that says so. A
+//      project opened by a relative path starts the player in the
+//      designer's working folder, where its relative paths hold; one opened
+//      by an absolute path, in the project's folder.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
@@ -79,6 +86,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #ifdef _WIN32
 #include <process.h>
 #define getpid _getpid
@@ -1316,6 +1324,80 @@ int main(int argc, char** argv) {
             snprintf(parent, sizeof parent, "%.*s", (int)(slash - home_cfg), home_cfg);
             (void)dsg_remove_tree(parent, slash + 1, err, sizeof err);
         }
+    }
+
+    // 14. the output folder: unique within a second; the working folder
+    {
+        brd_reset();
+        ui_open(dir);
+        settle();
+        CHECK(ui_project() != nullptr, "part 14: the project opened: '%s'", ui_status());
+        dsg_run_settings* rs = ui_run_settings();
+        rs->out_dir[0] = 0;
+        rs->sim = true;
+        settle();
+        // decision 11's names for this second and the two after it (the
+        // Run below may come in either), taken, each with the -2's log
+        char data[DSG_PATH_MAX], base[3][DSG_PATH_MAX], p[DSG_PATH_MAX + 16];
+        CHECK(dsg_join(data, sizeof data, ui_project()->folder, "data") == 0 && dsg_make_dir(data, err, sizeof err) == 0, "the data folder");
+        const int64_t t0 = (int64_t)time(nullptr);
+        for (int k = 0; k < 3; k++) {
+            CHECK(dsg_run_out_dir(ui_project()->folder, rs, t0 + k, base[k], sizeof base[k]) == 0, "a name");
+            snprintf(p, sizeof p, "%s-2.log", base[k]);
+            CHECK(dsg_make_dir(base[k], err, sizeof err) == 0 && dsg_write_file(p, "x", 1, err, sizeof err) == 0, "%s taken", base[k]);
+        }
+        char next[DSG_PATH_MAX] = "";
+        CHECK(ui_run_next_out_dir(next, sizeof next) && strlen(next) > 2 && strcmp(next + strlen(next) - 2, "-3") == 0,
+              "the next run's folder: '%s'", next);
+        CHECK(ui_run_start(), "Run: '%s'", ui_status());
+        frame();
+        const char* out = brd_run_arg(3);
+        bool third = false;
+        for (int k = 0; k < 3 && out; k++) {
+            snprintf(p, sizeof p, "%s-3", base[k]);
+            third = third || strcmp(out, p) == 0;
+        }
+        CHECK(brd_run_starts() == 1 && third, "a Run in a second whose name and -2 are taken writes to -3: '%s'", out ? out : "-");
+        brd_run_end(0, nullptr);
+        frame();
+        // every name taken: refused, and the status says why
+        for (int k = 0; k < 3; k++)
+            for (int i = 2; i <= 99; i++) {
+                snprintf(p, sizeof p, "%s-%d", base[k], i);
+                (void)dsg_make_dir(p, err, sizeof err);
+            }
+        CHECK(!ui_run_next_out_dir(next, sizeof next), "no free name: none to show");
+        CHECK(!ui_run_start() && strstr(ui_status(), "the names -2 to -99 after it exist") != nullptr && brd_run_starts() == 1,
+              "no free name: refused: '%s'", ui_status());
+        CHECK(strstr(ui_status(), "Run is not built") == nullptr, "not the stub's text");
+        // the working folder: the project's when its path is absolute
+        rs->out_dir[0] = 0;
+        CHECK(dsg_remove_tree(ui_project()->folder, "data", err, sizeof err) == 0, "the data folder removed: %s", err);
+        const bool abs_dir = dir[0] == '/' || (dir[0] && dir[1] == ':');
+        CHECK(ui_run_start(), "Run: '%s'", ui_status());
+        frame();
+        CHECK(brd_run_starts() == 2 && (abs_dir ? brd_run_cwd() && strcmp(brd_run_cwd(), dir) == 0 : brd_run_cwd() == nullptr),
+              "a project at '%s': the player starts in '%s'", dir, brd_run_cwd() ? brd_run_cwd() : "(the designer's folder)");
+        brd_run_end(0, nullptr);
+        frame();
+        // a relative path: the designer's own working folder
+        char rel[DSG_PATH_MAX];
+        CHECK(project(".", "designer_ui_rel", rel, sizeof rel), "a project at a relative path: %s", rel);
+        ui_open(rel);
+        settle();
+        CHECK(ui_project() && strcmp(ui_project()->folder, rel) == 0, "opened at '%s'", ui_project() ? ui_project()->folder : "-");
+        rs->sim = true;
+        CHECK(ui_run_start(), "Run: '%s'", ui_status());
+        frame();
+        CHECK(brd_run_starts() == 3 && brd_run_cwd() == nullptr, "a relative project: the player starts in the designer's folder ('%s')",
+              brd_run_cwd() ? brd_run_cwd() : "");
+        brd_run_end(0, nullptr);
+        frame();
+        ui_open(dir);   // nothing of it is open when it goes
+        settle();
+        ui_wait_checks(30000000000LL);
+        CHECK(dsg_remove_tree(".", "designer_ui_rel", err, sizeof err) == 0, "the relative project removed: %s", err);
+        brd_reset();
     }
 #endif
 

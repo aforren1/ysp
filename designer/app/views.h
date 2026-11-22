@@ -138,6 +138,10 @@ const dsg_run* ui_run();
 // posts a check with the new profile at the next frame; the next Run takes
 // the rest.
 dsg_run_settings* ui_run_settings();
+// The folder that the next run writes: the settings' out_dir, else decision
+// 11's name with -2, -3, ... after it when a run in the same second took it.
+// false: no project, or no name that fits or is free.
+bool ui_run_next_out_dir(char* out, size_t cap);
 // A check of the current text now, though nothing changed (a rig profile's
 // file changed: dsg_rig_changed()).
 void ui_check_again();
