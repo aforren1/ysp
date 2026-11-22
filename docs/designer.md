@@ -6,8 +6,10 @@ check on each change with its refusals linked to their places in the
 text, and redraw on input only. Step 4 is partly done (2026-11-19,
 branch `designer-step4`): the state chart, the tables and the property
 panels are built and merged, and the items left are in "The
-integration". Step 5 is built on branch `step5-int2`; step 6 is
-planned ("Plan of step 6"); step 7 is not started. This document
+integration". Step 5 is built on branch `step5-int2`. Step 6 is
+built on branch `step6-int` ("Parts B, G, R and V integrated"), but for
+part M, the measurement with the user on the display; step 7 is not
+started. This document
 gives the designer's decisions, its first version's scope, its architecture
 and its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
 designer's place in the rig. The measurements behind the UI decision are
@@ -3510,6 +3512,172 @@ and `WAYLAND_DISPLAY` unset):
   are initialized, and narrowing conversions are cast.
 - No ASan or ThreadSanitizer run: part V adds no thread.
 
+#### Parts B, G, R and V integrated (2026-11-22)
+
+Branch `step6-int`, from `designer-step6` (`1110636`: the plan, P, K, X
+and S). `step6-b` (B, `828cc0d`), `step6-g` (G, `5f829d6`), `step6-r`
+(R, `19cf8cc`) and `step6-v` (V, `2a04b9d`), merged in that order with
+`--no-ff`. After each merge the build and the designer's, the player's
+and the pack tool's tests passed, but after V's: its double and G's
+`rig.c` both define the rig section, so `test_designer_te` did not link
+until the first fix below.
+
+**Conflicts.** Each part added its subsection under "Decisions of step 6"
+at the same place in this file and an entry at the top of
+`docs/status.md`. One heading keeps the four subsections in merge order,
+and `status.md` keeps every entry, the newest first. In
+`designer/CMakeLists.txt`, B's `test_designer_build` and R's
+`fake_player` and `test_designer_run` were added at the same lines: both
+are kept. Git merged the code and G's CMake lines.
+
+**Part V's integration steps** (its subsection, "The integration (wave
+3)"):
+1. `te_run.cpp` defines `DSG_RUN_VIEW_DOUBLE` 0; `run_view_double.c` is
+   out of `test_designer_te`'s sources, which get `YSP_TE_FAKE_PLAYER`
+   and a dependency on `fake_player`. The double's two files stay, for a
+   run of `run/*` on it.
+2. The scripts match R's `fake_player` as merged, and the header
+   `trial,response,rt_s,outcome` gives R's parse its columns: "rt 0.412
+   s" shows. R's exit text for 3 starts with "Stopped".
+3. What the real parts needed of the test:
+   - The pack is a source of `dsg_build_stale()`: a pack of another size
+     is another pack. The script that the test wrote over the pack made
+     the Build stale, Run built again over the script, and
+     `fake_player` read a pack (exit 2). `fake_script()` pads the script
+     with comment lines to the pack's size.
+   - R's tick reads after a wake-up of the watch thread, which polls
+     every 250 ms, and the engine's fast frames take almost no time. The
+     waits are on wall time (at most 10 s), not on counts of frames.
+   - `run/build_table`: B's message for a quote that does not close
+     names `conditions.pstb`, row 2, which `dsg_csv_place()` reads as row
+     1. But the designer cannot index such a table (`csv.c` refuses what
+     ysp/table.h refuses), so the Issues panel has no cell to select. The
+     test keeps that case for the place only, and the click case is a
+     cell of 20 significant digits, which the designer indexes and the
+     pack tool refuses: row 1, column 1, as on the double.
+   - The rig folder. `yrt_user_dir()` refuses a folder under `/tmp`, and
+     it ignores a relative `XDG_CONFIG_HOME` and takes `HOME/.config`,
+     the user's own: the first run here, with a relative work folder,
+     listed `~/.config/ysp/rig`. The test now takes the work folder's
+     absolute path; when `yrig_dir()` refuses it, the test makes
+     `HOME/.cache/ysp_designer_te-PID` and `te_run_cleanup()` removes it
+     after the tests. It fails when its rig folder is the user's. On
+     macOS it sets `HOME`, as `test_designer_rig` does.
+4. Part V's hand mutants that the real parts reach, run again on B, R
+   and G (33; v-11, v-32, v-33, u-01 and u-02 are part 12 of
+   `test_designer_ui`, on part S's double, unchanged): 31 killed. v-16
+   ("did not close its data set" not shown) and v-31 (every run taken as
+   real) were killed only on the double's branch. The real branch now
+   checks, after the Kill of a simulated run, "Ended by signal 9", "did
+   not close its data set" and no display band, and in `run/sim_end`
+   that the command has `--sim` and the view says "(simulated)". Both
+   are killed now, and so is v-10.
+
+**Faults found and fixed.** Each fix has a test and hand mutants that
+fail it (each reverted).
+
+| Found by | Fault | Fix | Test; mutants |
+|---|---|---|---|
+| V and R | With no profile chosen (rig `""`), a real run starts the player with no `--rig`, which then loads `profile.json`, but the check ran with no profile. The Run view moved the setting to `profile` only in a frame that drew it. | `ui.cpp` resolves one name for the check and Run (`run_rig_name()`): `""` is `profile` for a real run while `dsg_rig_list()` lists it, and stays `""` for `--sim`. The check posts that name, a change of it posts a check, and Run passes `--rig` with it. The folder is listed at the open, at each Run and at most once a second otherwise. | `test_designer_ui` part 13 (9 checks): the check and a real run take `profile`; a simulated run and its check none; `profile.json` gone, none again. i2-01 to i2-04 |
+| R | R's folder name has whole seconds: two Runs in one second got one name, and the second was refused. | `dsg_run_out_dir()` keeps its frozen signature. `ui.cpp` takes its name, or the name with `-2` to `-99` after it, the first whose folder and `DIR.log` are both free. The Run view names the same folder through the new `views.h` call `ui_run_next_out_dir()`. A folder that the person typed is still refused when it exists. | `test_designer_ui` part 14: with the name and the `-2`'s log taken, the next folder and the Run's `--out` end in `-3`; with every name up to `-99` taken, Run is refused and says so. i3-01, i3-02, i3-06 |
+| R (S's text) | The status when `dsg_run_out_dir()` failed said "or Run is not built". | "the output folder's path is too long", or "NAME and the names -2 to -99 after it exist". | part 14; i3-03 |
+| This integration | A project opened by a relative path (`ysp_designer myproject`) gave the player a relative pack and output folder, with the project's folder as its working folder: the paths did not hold there (exit 2). | The player starts in the project's folder only when its path is absolute; otherwise in the designer's own. | part 14 (`build_run_double.c` records `desc.cwd`); `run/*` with a relative work folder passes. i3-04, i3-05 |
+| B | ThreadSanitizer: three races in the layout library when a Build and a check pack run at once. | pack/layout 0.3.5, Skribidi patch 0010 ([layout.md](layout.md#patch-0010-collection-ids-on-two-threads)). | `test_layout` part 10; ThreadSanitizer on `test_layout` and `test_designer_build` |
+
+The preview has no "same as Run" rig choice: it keeps its own (`""` is
+its built-in simulated rig), and the Run view copies its choice to it
+when the person chooses.
+
+**pack/layout 0.3.5** (the layout and the API do not change). Patch 0010
+makes the id counters of `skb_font_collection_create()` and
+`skb_attribute_collection_create()` atomic; `ylay_get_versions()` gives a
+constant struct (`HB_VERSION_STRING`); on Windows the performance
+counter's frequency is not kept in a static. `test_layout` part 10: four
+threads make 2,000 collections of each kind at once; without the patch
+387 to 1,092 got another's id in each of three runs, with it none. With
+the old `ylay_get_versions()` ThreadSanitizer reports it in `test_layout`
+and in `test_designer_build`; with the two Skribidi files reverted, it
+reports both counters in `test_designer_build`. The stamp lists ten
+patch hashes; ysp-vis 0.20.0.7 (pytest on Linux, its layout built with
+`tools/vendor_vis.py --layout gcc`: 82 passed, 14 skipped), MEX 1.6.5
+(version strings; `gcc -fsyntax-only` only).
+`tools/vendor_layout.py`: `ok: 463 files, 7735220 bytes`.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- ctest from the Release build tree, examples on, `DISPLAY` and
+  `WAYLAND_DISPLAY` unset: 148 of 148 with the Test Engine, 147 of
+  147 without. `test_designer_te` 47 of 47 (`run/*` 9 of 9 on B, R and G),
+  `test_designer_ui` 229 checks (part 13 and part 14 new),
+  `test_designer_ui_real` 93, `test_designer_build` 153,
+  `test_designer_run` 150, `test_designer_rig` 118, `test_layout` 151.
+- ASan with UBSan (Debug, built and run under `setarch -R`,
+  `halt_on_error`): the 16 designer tests (`test_designer_te` with leak
+  checks off), `test_player_sim`, `test_player_check`, `test_pack_tool`
+  and `test_layout`: no report.
+- ThreadSanitizer (the same, `race:swrast_dri.so`): the same 20 tests,
+  no report; then `test_designer_build` and `test_layout` three more
+  times each, and `test_designer_te`, `test_designer_run`,
+  `test_designer_build`, `test_designer_ui` and `test_layout` three more
+  times each: no report.
+- `-Wconversion -Wsign-conversion` (gcc) on the changed designer files:
+  no warning. clang 24 from the emsdk (`-fsyntax-only`,
+  `-Wsometimes-uninitialized`, `-Wconversion`, `-Wshorten-64-to-32`) on
+  every C and C++ file changed since `1110636`, `run_view_double.c` too:
+  no new warning (one in `layout_test.c` line 1011 is older). emcc
+  `-fsyntax-only` on the changed designer core and app files and
+  `pack/layout.c` and `pack/colr.c`, and emcc builds of the two patched
+  Skribidi files (with and without `-pthread`): no warning.
+- Mutation lists, `--check`: `player_eval`, `player_host`,
+  `player_lower`, `player_main`, `player_run`, `player_sim`, `player_v2`,
+  `gfx`, `pack` and `table`: 0 anchors not matching. The layout library
+  has no list.
+
+**Only CI can check.** MSVC (C4701, C4244), MinGW and macOS builds of the
+merged code; patch 0010's `_InterlockedIncrement()` branch and the
+Windows `QueryPerformanceFrequency()` change; the `_WIN32` branches of
+`build.c`, `run.c` and `rig.c` and Windows' `--sim` Kill with no Stop;
+`te_run.cpp`'s config folder on Windows (`APPDATA`) and macOS (`HOME`);
+`test_designer_te` on the three systems (CI's build trees are not under
+`/tmp`, so the test uses the work folder there); the wheels and the MEX
+builds.
+
+**Open.**
+- Part M, with the user on the display (below).
+- B: the check pack's build has no cancel; a Quit during a cold check
+  pack of the video case waits up to 3.6 s.
+- X and B: on Windows the pack tool's `run_program()` (ffmpeg) inherits
+  every inheritable handle (a fix in the pack tool).
+- R: `dsg_proc_poll()`'s -1 is both "not known" and SIGHUP.
+- V: no "draw again in 1 s" hook in `views.h` and no "open a folder" in
+  `UiPlatform`; the data folder's size is not shown.
+- G: `dsg.h`'s comment on `dsg_report.rig` (the chosen profile, also
+  when its load failed) is G's reading, not said in `dsg.h`.
+- Decision 14 makes the built-in rig the preview's default "when no
+  profile exists". The preview's `""` is the built-in rig whether or not
+  `profile.json` exists; only the Run view's choice moves it.
+
+**Part M** (the measurement with the user on the display; nothing of it
+ran here: no real player, no window). It should measure and see:
+- The player's dropped frames (`frames.csv`) for a whole stroop session
+  at 60 Hz on this machine's display: the designer idle; the Run view
+  shown with `trials.csv` growing (redraws at `DSG_RUN_REDRAW_HZ`, 2 a
+  second); and a designer that redraws every frame (the preview of a
+  second project, since a real run closes the preview's session). If
+  2 Hz costs frames, the knob is 0 while the player has the foreground.
+- Stop on the real player: SIGTERM through SDL 3.4.18's
+  `SDL_EVENT_QUIT`, exit 3, `session.json`'s `"aborted"` with reason
+  `quit`, and the Run view's "Stopped" text; Kill after 5 s and the
+  `xrandr` line, and whether the mode and ramp need it.
+- The player's foreground and its first frames beside the designer
+  (`posix_spawn()` with SCHED_OTHER; the player elevates its own frame
+  thread).
+- `--rig profile` on a real run with no profile chosen (`session.json`'s
+  `rig_profile`), and a refusal of a profile with a role that the check
+  marks (`rig profile 'NAME': ...`).
+- The first use of the window: the toolbar's Build, Run, Stop and Kill,
+  the Run view, the rig combo and the preview's band, the "A run goes"
+  question, and the loop's wait with `ui_run_wait_ms()`.
+
 ## First version
 
 In:
@@ -3662,8 +3830,15 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      preview itself (parts S, A, B, C, D) is not built.
 6. Build and Run.
    - Planned 2026-11-21 (branch `designer-step6-plan`): "Plan of step 6",
-     below. Its 16 decisions wait for the user. Wave 1 is parts P (the
-     player 0.18.0), K (the pack tool 0.12.0) and X (the process).
+     below. Wave 1 is parts P (the player 0.18.0), K (the pack tool
+     0.12.0) and X (the process). The user accepted decisions 1 to 17 on
+     2026-11-22.
+   - Partly done 2026-11-22: wave 1 and part S (the frozen interfaces)
+     merged into `designer-step6`; wave 2, parts B (Build), G (rig
+     profiles), R (Run) and V (the Run view), built and integrated on
+     `step6-int`, with pack/layout 0.3.5 ("Parts B, G, R and V
+     integrated"). Left: part M, the player's frames beside the designer
+     and the first use of the window, with the user on the display.
 7. The web build, with the text glue.
 
 ## Plan of step 4
