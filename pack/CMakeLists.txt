@@ -182,6 +182,15 @@ if(YSP_BUILD_PACK)
             YPT_STROOP_DIR="${PROJECT_SOURCE_DIR}/examples/pack/stroop"
             YPT_TEST_FONTS="${YSP_PACK_TEST_FONTS}")
         add_test(NAME test_pack_tool COMMAND test_pack_tool WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        # The entry cache's records, self-driven (tests/fuzz/cache_fuzz.c:
+        # cache_fuzz N [seed [build]], or --replay FILES). A short run with
+        # builds is a test: a record must never fail a build.
+        add_executable(cache_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/cache_fuzz.c)
+        target_link_libraries(cache_fuzz PRIVATE ysp_pack_tool)
+        target_compile_options(cache_fuzz PRIVATE ${YSP_WARNINGS})
+        target_compile_definitions(cache_fuzz PRIVATE YSP_FUZZ_SELF)
+        set_target_properties(cache_fuzz PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        add_test(NAME cache_fuzz_short COMMAND cache_fuzz 4000 1 build WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
         # The readers of other formats (pack/import.c) on their own: the test
         # compiles that file into itself, so the mutation runner can mutate it
         # (tests/mutate/import.toml).

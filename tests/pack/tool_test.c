@@ -17,6 +17,10 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+/* opendir, utime, chmod and pthreads under -std=c11 (the entry cache's tests) */
+#if (defined(__linux__) || defined(__EMSCRIPTEN__)) && !defined(_DEFAULT_SOURCE) && !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
 #ifndef YSCR_NO_SDL
 #define YSCR_NO_SDL
 #endif
@@ -40,12 +44,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #if defined(_WIN32)
 #include <direct.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <process.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/utime.h>
 #define MKDIR(p) _mkdir(p)
+#define RMDIR(p) _rmdir(p)
 #else
 #include <sys/stat.h>
+#include <dirent.h>
+#include <utime.h>
+#include <pthread.h>
+#include <unistd.h>
 #define MKDIR(p) mkdir(p, 0777)
+#define RMDIR(p) rmdir(p)
 #endif
 
 #ifndef YPT_TEST_DIR
@@ -1085,6 +1104,628 @@ static void test_ffmpeg_refusals(void) {
                    "remove '-flags +cgop-bitexact' from 'ffmpeg'", 0);
 }
 
+/* --- tool v0.12.0: cancel and the entry cache (docs/pack.md 19) ----------------- */
+
+static int exists(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+/* How often needle occurs in the file. */
+static int count_text(const char* path, const char* needle) {
+    size_t n, k = strlen(needle);
+    uint8_t* d = read_all(path, &n);
+    const char* at;
+    int c = 0;
+    if (!d) return -1;
+    d[n] = 0;
+    for (at = (const char*)d; (at = strstr(at, needle)) != NULL; at += k) c++;
+    free(d);
+    return c;
+}
+
+static int name_cmp(const void* a, const void* b) { return strcmp((const char*)a, (const char*)b); }
+
+/* The files of dir whose names end in suffix ("" every file), sorted. */
+static int list_dir(const char* dir, const char* suffix, char (*names)[96], int max) {
+    int n = 0;
+    size_t sl = strlen(suffix);
+#if defined(_WIN32)
+    char pat[1100];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    snprintf(pat, sizeof pat, "%s\\*", dir);
+    h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        size_t l = strlen(fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (l < sl || strcmp(fd.cFileName + l - sl, suffix) || l >= 96 || n >= max) continue;
+        snprintf(names[n++], 96, "%s", fd.cFileName);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR* dd = opendir(dir);
+    struct dirent* de;
+    if (!dd) return 0;
+    while ((de = readdir(dd)) != NULL) {
+        size_t l = strlen(de->d_name);
+        if (de->d_name[0] == '.' || l < sl || strcmp(de->d_name + l - sl, suffix) || l >= 96 || n >= max) continue;
+        snprintf(names[n++], 96, "%s", de->d_name);
+    }
+    closedir(dd);
+#endif
+    qsort(names, (size_t)n, 96, name_cmp);
+    return n;
+}
+
+static void clear_dir(const char* dir) {
+    char names[256][96], p[1200];
+    int n = list_dir(dir, "", names, 256), i;
+    for (i = 0; i < n; i++) {
+        snprintf(p, sizeof p, "%.1000s/%.95s", dir, names[i]);
+        remove(p);
+    }
+    RMDIR(dir);
+}
+
+static void set_mtime(const char* path, long long t) {
+#if defined(_WIN32)
+    struct _utimbuf u;
+    u.actime = (time_t)t;
+    u.modtime = (time_t)t;
+    _utime(path, &u);
+#else
+    struct utimbuf u;
+    u.actime = (time_t)t;
+    u.modtime = (time_t)t;
+    utime(path, &u);
+#endif
+}
+
+static long long mtime_of(const char* path) {
+#if defined(_WIN32)
+    struct _stat64 st;
+    return _stat64(path, &st) == 0 ? (long long)st.st_mtime : -1;
+#else
+    struct stat st;
+    return stat(path, &st) == 0 ? (long long)st.st_mtime : -1;
+#endif
+}
+
+static long long file_size(const char* path) {
+    size_t n = 0;
+    uint8_t* d = read_all(path, &n);
+    free(d);
+    return d ? (long long)n : -1;
+}
+
+/* A build of text with options; log and warn to files when named. */
+static int build_with(const char* text, const char* out, const char* cache, int64_t cache_max, const char* log_path, const char* warn_path,
+                      char* err, size_t cap) {
+    ypt_options o;
+    FILE* lf = log_path ? fopen(log_path, "w") : NULL;
+    FILE* wf = warn_path ? fopen(warn_path, "w") : NULL;
+    int rc;
+    memset(&o, 0, sizeof o);
+    o.cache = cache;
+    o.cache_max = cache_max;
+    o.log = lf;
+    o.warn = wf;
+    rc = ypt_build_text(text, strlen(text), W, out, &o, err, cap);
+    if (lf) fclose(lf);
+    if (wf) fclose(wf);
+    return rc;
+}
+
+/* A cache record as the tool writes one (docs/pack.md 19), for the parse
+ * checks and for records that are whole but wrong. */
+typedef struct tpart { uint32_t flags, source; const char* deriv; const uint8_t* data; uint64_t size; } tpart;
+
+static void tw32(uint8_t* p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+static void tw64(uint8_t* p, uint64_t v) { tw32(p, (uint32_t)v); tw32(p + 4, (uint32_t)(v >> 32)); }
+
+/* The size and XXH64 fields again after an edit, so only the edit is wrong. */
+static void rec_fix(uint8_t* d, size_t n) {
+    tw64(d + 48, (uint64_t)n);
+    tw64(d + 56, ypak_xxh64(d + 64, n - 64, 0));
+}
+
+/* The record's bytes (malloc'd) and their count in *n. */
+static uint8_t* rec_make(const uint8_t key[32], const tpart* p, int np, size_t* n) {
+    size_t at = 64 + 32 * (size_t)np, i, total = at;
+    uint8_t* d;
+    for (i = 0; i < (size_t)np; i++) total += ((strlen(p[i].deriv) + 15) & ~(size_t)15) + (((size_t)p[i].size + 15) & ~(size_t)15);
+    d = (uint8_t*)calloc(1, total + 1);
+    if (!d) return NULL;
+    memcpy(d, "YSPCACHE", 8);
+    tw32(d + 8, 1);
+    tw32(d + 12, (uint32_t)np);
+    memcpy(d + 16, key, 32);
+    for (i = 0; i < (size_t)np; i++) {
+        uint8_t* t = d + 64 + 32 * i;
+        size_t dl = strlen(p[i].deriv);
+        tw32(t, p[i].flags);
+        tw32(t + 4, p[i].source);
+        tw64(t + 8, dl);
+        tw64(t + 16, p[i].size);
+        memcpy(d + at, p[i].deriv, dl);
+        at += (dl + 15) & ~(size_t)15;
+        if (p[i].size) memcpy(d + at, p[i].data, (size_t)p[i].size);
+        at += ((size_t)p[i].size + 15) & ~(size_t)15;
+    }
+    rec_fix(d, total);
+    *n = total;
+    return d;
+}
+
+/* ypt_cache_parse() on a good record and on each kind of damage. */
+static void test_cache_parse(void) {
+    static const uint8_t five[5] = { 1, 2, 3, 4, 5 };
+    uint8_t key[32], other[32];
+    tpart tp[2];
+    ypt_cache_part got[4];
+    size_t n, i;
+    uint8_t* d;
+    uint8_t* x;
+    int r;
+    for (i = 0; i < 32; i++) { key[i] = (uint8_t)(i * 7 + 1); other[i] = key[i]; }
+    other[31] ^= 1;
+    memset(tp, 0, sizeof tp);
+    tp[0].source = 1;
+    tp[0].deriv = "{\"op\": \"copy\"}";
+    tp[1].flags = 1;
+    tp[1].deriv = "{\"op\": \"index\", \"frames\": 3}";
+    tp[1].data = five;
+    tp[1].size = 5;
+    d = rec_make(key, tp, 2, &n);
+    if (!d) { CHECK(0, "out of memory"); return; }
+    x = (uint8_t*)malloc(n + 64);
+    if (!x) { free(d); CHECK(0, "out of memory"); return; }
+    memset(got, 0, sizeof got);
+    r = ypt_cache_parse(d, n, key, got, 4);
+    CHECK(r == 2 && got[0].source == 1 && !got[0].data && got[0].size == 0 && got[0].deriv_len == strlen(tp[0].deriv) &&
+          !memcmp(got[0].deriv, tp[0].deriv, got[0].deriv_len) && got[1].flags == 1 && !got[1].source && got[1].size == 5 &&
+          got[1].data && !memcmp(got[1].data, five, 5) && got[1].deriv_len == strlen(tp[1].deriv),
+          "cache record: two parts read back (%d)", r);
+    CHECK(ypt_cache_parse(d, n, NULL, got, 4) == 2, "cache record: no key to compare");
+    CHECK(ypt_cache_parse(d, n, other, got, 4) < 0, "cache record: another key refused");
+    CHECK(ypt_cache_parse(d, n, key, got, 1) < 0, "cache record: more parts than the caller takes refused");
+    CHECK(ypt_cache_parse(d, n - 1, key, got, 4) < 0, "cache record: one byte short refused");
+    CHECK(ypt_cache_parse(d, 63, key, got, 4) < 0, "cache record: shorter than its header refused");
+#define DAMAGE(what, edit, fix)                                           \
+    do {                                                                  \
+        size_t m = n;                                                     \
+        int fx = fix;                                                     \
+        memcpy(x, d, n);                                                  \
+        edit;                                                             \
+        if (fx) rec_fix(x, m);                                            \
+        CHECK(ypt_cache_parse(x, m, key, got, 4) < 0, "cache record: %s refused", what); \
+    } while (0)
+    DAMAGE("another magic", x[0] = 'X', 0);
+    DAMAGE("version 2", tw32(x + 8, 2), 0);
+    DAMAGE("0 parts", tw32(x + 12, 0), 0);
+    DAMAGE("5 parts", tw32(x + 12, 5), 0);
+    DAMAGE("a size field one more", tw64(x + 48, (uint64_t)n + 1), 0);
+    DAMAGE("a byte of the bytes changed", x[n - 16 + 2] ^= 0x10, 0);
+    DAMAGE("the XXH64 changed", x[56] ^= 1, 0);
+    DAMAGE("a reserved field set", tw64(x + 64 + 32 + 24, 1), 1);
+    DAMAGE("a source mark of 2", tw32(x + 64 + 4, 2), 1);
+    DAMAGE("a derivation past 1 MiB", tw64(x + 64 + 32 + 8, ((uint64_t)1 << 20) + 1), 1);
+    DAMAGE("a derivation past the end", tw64(x + 64 + 32 + 8, (uint64_t)n), 1);
+    DAMAGE("bytes past the end", tw64(x + 64 + 32 + 16, (uint64_t)n), 1);
+    DAMAGE("padding not zero", x[n - 1] = 1, 1);
+    DAMAGE("16 bytes after the last part", (memset(x + n, 0, 16), m = n + 16), 1);
+    DAMAGE("a header of 0 parts and nothing else", (tw32(x + 12, 0), m = 64), 1);
+#undef DAMAGE
+    free(x);
+    free(d);
+    {   /* a part marked as the source's that holds bytes, whole otherwise */
+        tpart sp = tp[1];
+        sp.source = 1;
+        d = rec_make(key, &sp, 1, &n);
+        CHECK(d && ypt_cache_parse(d, n, key, got, 4) < 0, "cache record: a source part with bytes refused");
+        free(d);
+    }
+    {   /* a derivation past 1 MiB, whole: refused before the JSON reader */
+        size_t big = ((size_t)1 << 20) + 1, j;
+        char* dv = (char*)malloc(big + 1);
+        if (dv) {
+            dv[0] = '{';
+            for (j = 1; j + 1 < big; j++) dv[j] = ' ';
+            dv[big - 1] = '}';
+            dv[big] = 0;
+            tp[0].source = 0;
+            tp[0].deriv = dv;
+            d = rec_make(key, tp, 1, &n);
+            CHECK(d && ypt_cache_parse(d, n, key, got, 4) < 0, "cache record: a whole derivation of 1 MiB and a byte refused");
+            tp[0].deriv = "{}";
+            free(d);
+            dv[big - 2] = '}';
+            dv[big - 1] = 0;
+            tp[0].deriv = dv;
+            d = rec_make(key, tp, 1, &n);
+            CHECK(d && ypt_cache_parse(d, n, key, got, 4) == 1, "cache record: a derivation of 1 MiB taken");
+            free(d);
+            free(dv);
+        }
+    }
+}
+
+static int g_calls, g_cancel_at;
+static int cancel_at(void* ctx) { (void)ctx; return ++g_calls >= g_cancel_at; }
+
+/* ypt_options.cancel between entries (designer step 6, decision 4). */
+static void test_cancel(void) {
+    char err[1024];
+    ypt_options o;
+    int rc;
+    memset(&o, 0, sizeof o);
+    o.cancel = cancel_at;
+    remove(W "/canceled.ysppak");
+    g_calls = 0;
+    g_cancel_at = 2;
+    rc = ypt_build_text(g_desc, strlen(g_desc), W, W "/canceled.ysppak", &o, err, sizeof err);
+    CHECK(rc == YPT_ERR_CANCELED && strstr(err, "canceled") && g_calls == 2, "a cancel before the second resource: %d, %d calls: %s", rc, g_calls, err);
+    CHECK(!exists(W "/canceled.ysppak") && !exists(W "/canceled.ysppak.tmp"), "a canceled build leaves no pack and no temporary file");
+    g_calls = 0;
+    g_cancel_at = 1;
+    rc = ypt_build_text(g_desc, strlen(g_desc), W, W "/canceled.ysppak", &o, err, sizeof err);
+    CHECK(rc == YPT_ERR_CANCELED && g_calls == 1 && !exists(W "/canceled.ysppak") && !exists(W "/canceled.ysppak.tmp"),
+          "a cancel before the first resource: %d, %d calls", rc, g_calls);
+    g_calls = 0;
+    g_cancel_at = 1 << 30;
+    rc = ypt_build_text(g_desc, strlen(g_desc), W, W "/not_canceled.ysppak", &o, err, sizeof err);
+    /* every entry but the manifest and the chunk table, and the glyph runs' derivation */
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/not_canceled.ysppak") && g_calls == (int)N_ENTRIES - 1,
+          "a cancel that never comes: the same bytes, read before each entry and the glyph runs' derivation (%d calls): %s", g_calls, err);
+}
+
+typedef struct tjob { const char* out; const char* cache; int rc; char err[512]; } tjob;
+#if defined(_WIN32)
+static unsigned __stdcall build_job(void* p) {
+#else
+static void* build_job(void* p) {
+#endif
+    tjob* j = (tjob*)p;
+    j->rc = build_with(g_desc_core, j->out, j->cache, 0, NULL, NULL, j->err, sizeof j->err);
+    return 0;
+}
+
+/* Two builds at once into one cold cache (the check pack's and Build's), of
+ * the description without glyph runs: Skribidi's font collection counter
+ * is a known race between two layouts (docs/designer.md, "The build
+ * thread"), and this test is the cache's. */
+static void two_builds(const char* cache) {
+    tjob j[2];
+    int k;
+    char err[1024];
+    CHECK(build_text(g_desc_core, W "/thread_ref.ysppak", err, sizeof err) == 0, "the core description: %s", err);
+    memset(j, 0, sizeof j);
+    j[0].out = W "/thread0.ysppak";
+    j[1].out = W "/thread1.ysppak";
+    j[0].cache = j[1].cache = cache;
+#if defined(_WIN32)
+    {
+        HANDLE h[2];
+        for (k = 0; k < 2; k++) h[k] = (HANDLE)_beginthreadex(NULL, 0, build_job, &j[k], 0, NULL);
+        for (k = 0; k < 2; k++) if (h[k]) { WaitForSingleObject(h[k], INFINITE); CloseHandle(h[k]); } else build_job(&j[k]);
+    }
+#else
+    {
+        pthread_t t[2];
+        int ok[2];
+        for (k = 0; k < 2; k++) ok[k] = pthread_create(&t[k], NULL, build_job, &j[k]) == 0;
+        for (k = 0; k < 2; k++) if (ok[k]) pthread_join(t[k], NULL); else build_job(&j[k]);
+    }
+#endif
+    for (k = 0; k < 2; k++)
+        CHECK(j[k].rc == 0 && same_file(W "/thread_ref.ysppak", j[k].out), "two builds at once into one cache, build %d: the same bytes: %s", k, j[k].err);
+}
+
+/* The entry cache on the corpus (decision 17): the pack's bytes with no
+ * cache, a cold one and a warm one are the same; every damaged or wrong
+ * record is a miss; the key holds the source, the resource and the
+ * project's audio; the trim. */
+#define CDIR W "/cache/a/b"
+#define N_RECORDS 13   /* 9 textures; u8, s32 and f64 converted; at44 resampled */
+static void test_cache(void) {
+    char err[1024], names[64][96], p[1200];
+    int nr, k, rc, hits;
+    long long now = (long long)time(NULL);
+    clear_dir(CDIR);
+    RMDIR(W "/cache/a");
+    RMDIR(W "/cache");
+    rc = build_with(g_desc, W "/c_cold.ysppak", CDIR, 0, W "/c_cold.log", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_cold.ysppak"), "a cold cache (its folder made with its parents): the same bytes: %s", err);
+    CHECK(count_text(W "/c_cold.log", "(cache)") == 0, "a cold cache: no entry from it");
+    nr = list_dir(CDIR, ".yspce", names, 64);
+    CHECK(nr == N_RECORDS, "a cold cache: %d records written, want %d (textures and converted or resampled audio)", nr, N_RECORDS);
+    CHECK(list_dir(CDIR, ".tmp", names + nr, 64 - nr) == 0, "a cold cache: no temporary file left");
+    rc = build_with(g_desc, W "/c_warm.ysppak", CDIR, 0, W "/c_warm.log", NULL, err, sizeof err);
+    hits = count_text(W "/c_warm.log", "(cache)");
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_warm.ysppak") && hits == N_RECORDS, "a warm cache: the same bytes, %d entries from it: %s", hits, err);
+    /* every record damaged one way: each a miss, the same bytes, and each
+     * written again by that build */
+    for (k = 0; k < nr; k++) {
+        size_t n = 0, m = 0;
+        uint8_t* d;
+        uint8_t* r2 = NULL;
+        ypt_cache_part cp[4];
+        tpart tp;
+        snprintf(p, sizeof p, CDIR "/%.95s", names[k]);
+        d = read_all(p, &n);
+        if (!d || ypt_cache_parse(d, n, NULL, cp, 4) != 1) { CHECK(0, "record %s reads back", names[k]); free(d); continue; }
+        memset(&tp, 0, sizeof tp);
+        tp.flags = cp[0].flags;
+        tp.deriv = "{\"op\": \"copy\"}";
+        tp.data = cp[0].data;
+        tp.size = cp[0].size;
+        switch (k % 7) {
+        case 0: d[n / 2] ^= 0x40; write_file(p, d, n); break;                  /* a flipped bit */
+        case 1: write_file(p, d, n / 2); break;                                 /* cut short */
+        case 2: write_file(p, d, 0); break;                                     /* empty */
+        case 3: {                                                               /* another record's bytes */
+            char q[1200];
+            size_t on = 0;
+            uint8_t* od;
+            snprintf(q, sizeof q, CDIR "/%.95s", names[(k + 1) % nr]);
+            od = read_all(q, &on);
+            if (od) write_file(p, od, on);
+            free(od);
+        } break;
+        case 4: tp.flags |= 0x100; r2 = rec_make(d + 16, &tp, 1, &m); break;    /* flags the entry cannot have */
+        case 5: tp.source = 1; tp.size = 0; r2 = rec_make(d + 16, &tp, 1, &m); break;   /* marked as the source's bytes */
+        default: tp.deriv = "[1]"; r2 = rec_make(d + 16, &tp, 1, &m); break;    /* a derivation that is not an object */
+        }
+        if (r2) write_file(p, r2, m);
+        free(r2);
+        free(d);
+    }
+    rc = build_with(g_desc, W "/c_bad.ysppak", CDIR, 0, W "/c_bad.log", NULL, err, sizeof err);
+    hits = count_text(W "/c_bad.log", "(cache)");
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_bad.ysppak") && hits == 0, "damaged and wrong records: misses (%d hits), the same bytes: %s", hits, err);
+    rc = build_with(g_desc, W "/c_again.ysppak", CDIR, 0, W "/c_again.log", NULL, err, sizeof err);
+    hits = count_text(W "/c_again.log", "(cache)");
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_again.ysppak") && hits == N_RECORDS, "the damaged records were written again: %d hits", hits);
+    /* the key: a resource's option, a source's bytes, the project's audio */
+    {
+        static const char from[] = "{\"kind\": \"texture\", \"source\": \"img/gray.png\"}";
+        const char* at = strstr(g_desc, from);
+        char* v = (char*)malloc(strlen(g_desc) + 64);
+        if (at && v) {
+            snprintf(v, strlen(g_desc) + 64, "%.*s{\"kind\": \"texture\", \"source\": \"img/gray.png\", \"encoding\": \"linear\"}%s", (int)(at - g_desc), g_desc,
+                     at + strlen(from));
+            CHECK(build_text(v, W "/c_opt_ref.ysppak", err, sizeof err) == 0 &&
+                  build_with(v, W "/c_opt.ysppak", CDIR, 0, NULL, NULL, err, sizeof err) == 0 && same_file(W "/c_opt_ref.ysppak", W "/c_opt.ysppak"),
+                  "another option of a resource: a miss, the bytes without a cache: %s", err);
+        } else {
+            CHECK(0, "the gray texture in the description");
+        }
+        free(v);
+    }
+    {
+        size_t n = 0;
+        uint8_t* keep = read_all(W "/img/gray.png", &n);
+        static uint8_t g2[17 * 9];
+        size_t i;
+        for (i = 0; i < sizeof g2; i++) g2[i] = (uint8_t)(255 - i * 13);
+        make_png(W "/img/gray.png", 17, 9, 0, 8, g2, 0);
+        CHECK(build_text(g_desc, W "/c_src_ref.ysppak", err, sizeof err) == 0 &&
+              build_with(g_desc, W "/c_src.ysppak", CDIR, 0, NULL, NULL, err, sizeof err) == 0 && same_file(W "/c_src_ref.ysppak", W "/c_src.ysppak") &&
+              !same_file(W "/c_src.ysppak", W "/corpus.ysppak"),
+              "a source with other bytes: a miss, the bytes without a cache: %s", err);
+        if (keep) write_file(W "/img/gray.png", keep, n);
+        free(keep);
+    }
+    {
+        static const char a48[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"audio\": {\"rate\": 48000, \"channels\": 2}, \"resources\": ["
+                                  "{\"kind\": \"audio\", \"name\": \"a.wav\", \"source\": \"audio/at44.wav\", \"resample\": \"sinc_best\"}]}";
+        static const char a96[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"audio\": {\"rate\": 96000, \"channels\": 2}, \"resources\": ["
+                                  "{\"kind\": \"audio\", \"name\": \"a.wav\", \"source\": \"audio/at44.wav\", \"resample\": \"sinc_best\"}]}";
+        CHECK(build_with(a48, W "/c_a48.ysppak", CDIR, 0, NULL, NULL, err, sizeof err) == 0 && build_text(a96, W "/c_a96_ref.ysppak", err, sizeof err) == 0 &&
+              build_with(a96, W "/c_a96.ysppak", CDIR, 0, NULL, NULL, err, sizeof err) == 0 && same_file(W "/c_a96_ref.ysppak", W "/c_a96.ysppak"),
+              "another project rate: a miss, the bytes without a cache: %s", err);
+    }
+    /* the trim: least recently used first, a hit makes a record recent */
+    {
+        int i, recent = -1, n_recent = 0;
+        long long total = 0;
+        int64_t kept = -1;
+        static const char gray[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"audio\": {\"rate\": 48000, \"channels\": 2}, \"resources\": ["
+                                   "{\"kind\": \"texture\", \"source\": \"img/gray.png\"}]}";
+        nr = list_dir(CDIR, ".yspce", names, 64);
+        for (i = 0; i < nr; i++) {
+            snprintf(p, sizeof p, CDIR "/%.95s", names[i]);
+            set_mtime(p, now - 5000 + i);
+            total += file_size(p);
+        }
+        CHECK(ypt_cache_trim(CDIR, INT64_MAX, &kept, err, sizeof err) == 0 && kept == total && list_dir(CDIR, ".yspce", names, 64) == nr,
+              "trim with room for all: every record kept (%lld of %lld bytes)", (long long)kept, total);
+        rc = build_with(gray, W "/c_gray.ysppak", CDIR, 0, W "/c_gray.log", NULL, err, sizeof err);
+        CHECK(rc == 0 && count_text(W "/c_gray.log", "(cache)") == 1, "the gray texture alone: a hit: %s", err);
+        for (i = 0; i < nr; i++) {
+            snprintf(p, sizeof p, CDIR "/%.95s", names[i]);
+            if (mtime_of(p) > now - 60) { recent = i; n_recent++; }
+        }
+        CHECK(n_recent == 1, "a hit makes its record the most recent (%d records recent)", n_recent);
+        snprintf(p, sizeof p, CDIR "/%064d.1-2.tmp", 0);
+        write_file(p, "x", 1);
+        set_mtime(p, now - 7200);
+        snprintf(p, sizeof p, CDIR "/%064d.3-4.tmp", 0);
+        write_file(p, "y", 1);
+        write_file(CDIR "/keep.txt", "z", 1);
+        set_mtime(CDIR "/keep.txt", now - 7200);
+        if (recent >= 0) {
+            long long rs;
+            snprintf(p, sizeof p, CDIR "/%.95s", names[recent]);
+            rs = file_size(p);
+            CHECK(ypt_cache_trim(CDIR, rs, &kept, err, sizeof err) == 0 && kept == rs && list_dir(CDIR, ".yspce", names + 32, 32) == 1 &&
+                  !strcmp(names[32], names[recent]),
+                  "trim to one record's bytes: the most recent stays (%lld bytes kept)", (long long)kept);
+        }
+        snprintf(p, sizeof p, CDIR "/%064d.1-2.tmp", 0);
+        CHECK(!exists(p), "trim: a temporary file older than an hour removed");
+        snprintf(p, sizeof p, CDIR "/%064d.3-4.tmp", 0);
+        CHECK(exists(p), "trim: a new temporary file kept (a build may be writing it)");
+        remove(p);
+        CHECK(ypt_cache_trim(CDIR, 0, &kept, err, sizeof err) == 0 && kept == 0 && list_dir(CDIR, ".yspce", names, 64) == 0 && exists(CDIR "/keep.txt"),
+              "trim to 0: no record left, another file kept");
+        remove(CDIR "/keep.txt");
+        CHECK(ypt_cache_trim(W "/no-such-folder", 0, &kept, err, sizeof err) < 0 && strstr(err, "no-such-folder"), "trim of a folder that is not there: %s", err);
+    }
+    /* cache_max: the build trims after it writes */
+    rc = build_with(g_desc, W "/c_max.ysppak", CDIR, 1, NULL, NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_max.ysppak") && list_dir(CDIR, ".yspce", names, 64) == 0,
+          "cache_max of 1 byte: the build's records trimmed away: %s", err);
+    rc = build_with(g_desc, W "/c_max2.ysppak", CDIR, (int64_t)1 << 40, NULL, NULL, err, sizeof err);
+    CHECK(rc == 0 && list_dir(CDIR, ".yspce", names, 64) == N_RECORDS, "cache_max of 1 TiB: every record kept");
+    /* a cache that cannot be made: a warning, the same bytes */
+    rc = build_with(g_desc, W "/c_nodir.ysppak", W "/readme.txt/cache", 0, NULL, W "/c_nodir.warn", err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/corpus.ysppak", W "/c_nodir.ysppak") && count_text(W "/c_nodir.warn", "warning: the entry cache") == 1,
+          "a cache folder that cannot be made: a warning and the same bytes: %s", err);
+    /* two builds at once into one cold cache, then a warm build */
+    clear_dir(W "/cache2");
+    two_builds(W "/cache2");
+    CHECK(list_dir(W "/cache2", ".yspce", names, 64) == N_RECORDS && list_dir(W "/cache2", ".tmp", names, 64) == 0,
+          "two builds at once: %d records, no temporary file", list_dir(W "/cache2", ".yspce", names, 64));
+    rc = build_with(g_desc_core, W "/c_two.ysppak", W "/cache2", 0, W "/c_two.log", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/thread_ref.ysppak", W "/c_two.ysppak") && count_text(W "/c_two.log", "(cache)") == N_RECORDS,
+          "after two builds at once: a warm build, the same bytes: %s", err);
+}
+
+/* 1 when the file holds the bytes of needle. */
+static int has_bytes(const char* path, const char* needle) {
+    size_t n, k = strlen(needle), i;
+    uint8_t* d = read_all(path, &n);
+    int r = 0;
+    for (i = 0; d && i + k <= n && !r; i++) r = !memcmp(d + i, needle, k);
+    free(d);
+    return r;
+}
+
+static const char* g_watch;
+static int g_saw;
+static int cancel_when(void* ctx) {
+    (void)ctx;
+    if (!exists(g_watch)) return 0;
+    g_saw++;
+    return 1;
+}
+
+#if defined(_WIN32)
+#define N_VIDEOS 2
+#else
+#define N_VIDEOS 1
+#endif
+
+/* Cancel and the entry cache with the ffmpeg step and the video index. */
+static void test_video_cache(const char* t) {
+    char err[1024], names[64][96];
+    int rc, hits;
+    {   /* a cancel set while ffmpeg runs (its output file exists): the step
+         * goes to its end, then the build stops */
+        ypt_options o;
+        memset(&o, 0, sizeof o);
+        o.cancel = cancel_when;
+        g_watch = W "/cancel_ff.ysppak.tmp.v0.mpg";
+        g_saw = 0;
+        remove(g_watch);
+        remove(W "/cancel_ff.ysppak");
+        remove(W "/cancel_ff.ysppak.tmp");
+        rc = ypt_build_text(t, strlen(t), W, W "/cancel_ff.ysppak", &o, err, sizeof err);
+        CHECK(rc == YPT_ERR_CANCELED && g_saw >= 1, "a cancel during the ffmpeg step stops after it: %d, seen %d: %s", rc, g_saw, err);
+        CHECK(!exists(W "/cancel_ff.ysppak") && !exists(W "/cancel_ff.ysppak.tmp") && !exists(g_watch) && !exists(W "/cancel_ff.ysppak.tmp.v0.yspvi"),
+              "a cancel during the ffmpeg step: no pack, no temporary file");
+    }
+    clear_dir(W "/vcache");
+    rc = build_with(t, W "/video_cold.ysppak", W "/vcache", 0, W "/video_cold.log", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_cold.ysppak") && count_text(W "/video_cold.log", "(cache)") == 0 &&
+          list_dir(W "/vcache", ".yspce", names, 64) == N_VIDEOS, "video, a cold cache: the same bytes, one record a video: %s", err);
+    rc = build_with(t, W "/video_warm.ysppak", W "/vcache", 0, W "/video_warm.log", NULL, err, sizeof err);
+    hits = count_text(W "/video_warm.log", "(cache)");
+    CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_warm.ysppak") && hits == 2 * N_VIDEOS,
+          "video, a warm cache: the same bytes, each video and its index from it (%d): %s", hits, err);
+    {   /* another argument of the step: a miss */
+        static const char from[] = "\"-q:v\", \"3\"";
+        const char* at = strstr(t, from);
+        char v[4096];
+        if (at) {
+            snprintf(v, sizeof v, "%.*s\"-q:v\", \"5\"%s", (int)(at - t), t, at + strlen(from));
+            CHECK(build_text(v, W "/video_q5_ref.ysppak", err, sizeof err) == 0 &&
+                  build_with(v, W "/video_q5.ysppak", W "/vcache", 0, NULL, NULL, err, sizeof err) == 0 &&
+                  same_file(W "/video_q5_ref.ysppak", W "/video_q5.ysppak") && !same_file(W "/video_q5.ysppak", W "/video.ysppak"),
+                  "video, another argument: a miss, the bytes without a cache: %s", err);
+        }
+    }
+#if !defined(_WIN32)
+    {   /* another ffmpeg: another version line, or only another configuration
+         * (the same pack): each a miss */
+        static const char wv[] = "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then echo 'ffmpeg version 0.0-ysp-test Copyright (c) the test'; "
+                                 "echo 'configuration: --ysp-test'; exit 0; fi\nexec ffmpeg \"$@\"\n";
+        static const char wc[] = "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then ffmpeg -version | head -n 1; "
+                                 "echo 'configuration: --ysp-test'; exit 0; fi\nexec ffmpeg \"$@\"\n";
+        ypt_options o;
+        FILE* lf;
+        write_file(W "/ffwrap_v.sh", wv, sizeof wv - 1);
+        write_file(W "/ffwrap_c.sh", wc, sizeof wc - 1);
+        chmod(W "/ffwrap_v.sh", 0755);
+        chmod(W "/ffwrap_c.sh", 0755);
+        memset(&o, 0, sizeof o);
+        o.ffmpeg = W "/ffwrap_v.sh";
+        rc = ypt_build_text(t, strlen(t), W, W "/video_wv_ref.ysppak", &o, err, sizeof err);
+        o.cache = W "/vcache";
+        lf = fopen(W "/video_wv.log", "w");
+        o.log = lf;
+        if (rc == 0) rc = ypt_build_text(t, strlen(t), W, W "/video_wv.ysppak", &o, err, sizeof err);
+        if (lf) fclose(lf);
+        CHECK(rc == 0 && count_text(W "/video_wv.log", "(cache)") == 0 && same_file(W "/video_wv_ref.ysppak", W "/video_wv.ysppak") &&
+              has_bytes(W "/video_wv.ysppak", "ffmpeg version 0.0-ysp-test"), "video, another ffmpeg version: a miss: %s", err);
+        o.ffmpeg = W "/ffwrap_c.sh";
+        lf = fopen(W "/video_wc.log", "w");
+        o.log = lf;
+        rc = ypt_build_text(t, strlen(t), W, W "/video_wc.ysppak", &o, err, sizeof err);
+        if (lf) fclose(lf);
+        CHECK(rc == 0 && count_text(W "/video_wc.log", "(cache)") == 0 && same_file(W "/video.ysppak", W "/video_wc.ysppak"),
+              "video, the same version line from another configuration: a miss, the same bytes: %s", err);
+    }
+#endif
+    {   /* a copied MPEG-1 file: the record holds the index, not the video */
+        static const char tc[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [{\"kind\": \"video\", \"name\": \"video/copy.mpg\", "
+                                 "\"source\": \"video/copy.mpg\"}]}";
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        long long vs = -1;
+        int i, k, before, after, small = 0;
+        char old[64][96];
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        if (ypak_open(&p, &d)) {
+            const void* v = entry(&p, "video/clip.mpg", &e);
+            if (v) { write_file(W "/video/copy.mpg", v, (size_t)e.size); vs = (long long)e.size; }
+            ypak_close(&p);
+        }
+        before = list_dir(W "/vcache", ".yspce", old, 64);
+        rc = build_text(tc, W "/copy_ref.ysppak", err, sizeof err);
+        CHECK(rc == 0 && build_with(tc, W "/copy_cold.ysppak", W "/vcache", 0, NULL, NULL, err, sizeof err) == 0 &&
+              same_file(W "/copy_ref.ysppak", W "/copy_cold.ysppak"), "a copied video, a cold cache: the same bytes: %s", err);
+        after = list_dir(W "/vcache", ".yspce", names, 64);
+        for (i = 0; i < after; i++) {
+            char q[1200];
+            int seen = 0;
+            for (k = 0; k < before; k++) seen |= !strcmp(old[k], names[i]);
+            snprintf(q, sizeof q, W "/vcache/%.95s", names[i]);
+            if (!seen && file_size(q) < vs) small++;
+        }
+        rc = build_with(tc, W "/copy_warm.ysppak", W "/vcache", 0, W "/copy_warm.log", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(W "/copy_ref.ysppak", W "/copy_warm.ysppak") && count_text(W "/copy_warm.log", "(cache)") == 2 && after == before + 1 && small == 1,
+              "a copied video, a warm cache: the same bytes, its new record smaller than the video (%d of %d): %s", small, after, err);
+    }
+}
+
 /* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
  * raw gray clip made in code becomes MPEG-1 (pl_mpeg indexes it on every
  * platform) and, on Windows, H.264 in MP4 (Media Foundation indexes it).
@@ -1177,6 +1818,7 @@ static void test_video(void) {
               "video rebuild without ffmpeg takes the recorded output: %s", err);
         free(text);
     }
+    test_video_cache(t);
     /* the thread count (decided 2026-10-20) in the command and as a
      * parameter: the author's 3 for MPEG-1, the machine's for H.264. The
      * rebuild above was identical, so it ran with the recorded 3, not the
@@ -2461,7 +3103,10 @@ int main(void) {
             }
             if (f) fclose(f);
         }
+        test_cancel();
+        test_cache();
     }
+    test_cache_parse();
     test_core_pack();
     test_stroop_pack();
     test_lookup_pack();
