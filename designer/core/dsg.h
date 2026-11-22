@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define DSG_VERSION_STRING "0.3.0"
+#define DSG_VERSION_STRING "0.4.0"
 
 /* The designer's folder inside a project, and the files in it. */
 #define DSG_DIR            ".designer"
@@ -36,8 +36,15 @@ extern "C" {
 #define DSG_CHECK_PACK     ".designer/check/check.ysppak"
 /* The description's file name when the caller names a folder. */
 #define DSG_DESC_FILE      "pack.json"
+/* Step 6: the entry cache that the check pack and Build share (decision 17,
+ * part K's ypt_options.cache), and Build's folder (decision 1). */
+#define DSG_CACHE_DIR      ".designer/cache/entries"
+#define DSG_BUILD_DIR      "build"
 
 #define DSG_PATH_MAX 4096
+/* Step 6: a rig profile's name, its NUL included ("profile" for
+ * profile.json; ysp/rigfile.h's names are shorter). */
+#define DSG_RIG_NAME 64
 
 /* --- the platform (platform.c: the only file with OS calls) ---------------- */
 
@@ -231,8 +238,15 @@ enum {
     DSG_FROM_RUN,          /* tier 3: what a real run needs                   */
     DSG_FROM_PACK,         /* the pack tool, building the check pack          */
     DSG_FROM_DESIGNER,     /* the designer itself (a file it cannot write)    */
-    DSG_FROM_PREVIEW       /* the preview: a session's refusal at its load or
+    DSG_FROM_PREVIEW,      /* the preview: a session's refusal at its load or
                             * at run time (preview.h)                         */
+    /* Step 6 (dsg.h 0.4.0). */
+    DSG_FROM_BUILD,        /* Build (build.c): the pack tool's error line and
+                            * each "warning:" line                            */
+    DSG_FROM_PLAYER_RUN,   /* Run (run.c): a run that the player refused or
+                            * that failed, its log's last line                */
+    DSG_FROM_RIG           /* the rig profile itself (rig.c, check.c): a file
+                            * that does not load, a check note of yrig_load() */
 };
 
 typedef struct dsg_issue {
@@ -242,6 +256,11 @@ typedef struct dsg_issue {
     int         object;        /* tier 2: PL_OBJ_*; tier 3: PL_NEED_*          */
     const char* name;          /* what object names; NULL: none                */
     const char* message;
+    /* Step 6: the rig profile that the check ran with causes it, so a check
+     * with no profile would not say it (a role that the profile binds to a
+     * family that the role does not list). The report's rig names the
+     * profile; the Issues panel says so. Always true for DSG_FROM_RIG. */
+    bool        rig;
 } dsg_issue;
 
 /* What a check gives. Every pointer stays valid until the checker's next
@@ -257,6 +276,9 @@ typedef struct dsg_report {
     int              n_errors;
     bool             built;      /* this check (re)built the check pack       */
     bool             have_pack;  /* a check pack exists after this check      */
+    /* Step 6: the rig profile that the check ran with (pl_check_desc.rig and
+     * .cal, decision 13); "": none. */
+    char             rig[DSG_RIG_NAME];
 } dsg_report;
 
 typedef struct dsg_checker dsg_checker;
@@ -268,6 +290,15 @@ void dsg_checker_free(dsg_checker* c);
 /* Forgets the check pack, so the next check builds one (another project, or
  * the project's sources changed on disk). */
 void dsg_checker_forget(dsg_checker* c);
+/* Step 6 (decision 13): the rig profile of the next checks by its name
+ * (dsg_rig_load()), "" or NULL for none. The checker loads it at its next
+ * check and keeps it; it loads it again when the name changes or
+ * dsg_rig_changed() says so. pl_check_desc.rig is the profile and .cal its
+ * calibration when dsg_rig_cal() gives one (else the stand-in). A profile
+ * that does not load is a DSG_FROM_RIG error and the check runs with none.
+ * The report's rig is the profile that the check ran with. Part G fills it
+ * in check.c; part S's stub keeps the name and runs with none. */
+void dsg_checker_set_rig(dsg_checker* c, const char* name);
 
 /* Checks text as the definition of project p with the player's load.
  *
@@ -355,6 +386,10 @@ typedef struct dsg_session_settings {
     int32_t  pin_row;             /* the pin's table row; -1: any            */
     int32_t  n_fields;
     dsg_session_field fields[DSG_SESSION_FIELDS];
+    /* Step 6 (decision 14): the preview's rig profile by its name, which
+     * the session's load reads (dsg_rig_load(), pl_sim_desc.rig and .cal);
+     * "": the built-in simulated rig. */
+    char     rig[DSG_RIG_NAME];
     char     out_dir[DSG_PATH_MAX];   /* the data set's folder               */
 } dsg_session_settings;
 
@@ -408,9 +443,11 @@ dsg_worker* dsg_worker_start(const dsg_worker_desc* d, char* err, size_t cap);
 void dsg_worker_stop(dsg_worker* w);
 
 /* Posts a check job: text as project p's definition, with the dirty tables
- * of the document (NULL: the tables on disk). 0, or -1 when out of memory. */
+ * of the document (NULL: the tables on disk) and the rig profile by its name
+ * (step 6; "" or NULL: none), which the thread gives to
+ * dsg_checker_set_rig() before the check. 0, or -1 when out of memory. */
 int  dsg_worker_check(dsg_worker* w, const dsg_project* p, const char* text, size_t n, const struct dsg_doc* tables,
-                      uint64_t revision);
+                      uint64_t revision, const char* rig);
 /* The checker forgets its pack before the next check (dsg_checker_forget()). */
 void dsg_worker_forget(dsg_worker* w);
 /* Posts a session job: an accepted text, the pack its check ran against
@@ -444,6 +481,266 @@ typedef struct dsg_worker_stats {
     int64_t sessions_closed;      /* every close on the thread                */
 } dsg_worker_stats;
 void dsg_worker_get_stats(dsg_worker* w, dsg_worker_stats* out);
+
+/* --- step 6: rig profiles (rig.c, part G; docs/designer.md, "Rig profiles") --
+ *
+ * FROZEN BY PART S (docs/designer.md, "Part S as built" of step 6), as are
+ * the Build and Run sections below. A part that needs a change stops and
+ * reports it.
+ *
+ * A dsg_rig is a profile of the user's rig folder (yrig_dir()) and its
+ * calibration file, loaded together. The calls take no lock: a dsg_rig is
+ * one thread's (the checker keeps its own on the check thread, a session's
+ * load its own, the Run view its own on the UI thread). A load costs about
+ * 176 us (yrig_load_file() with a 62,528-byte calibration, "Measured"), so
+ * load once per choice or change, never per frame or per check. */
+struct yrig_profile;
+struct ycol_cal;
+typedef struct dsg_rig dsg_rig;
+
+/* The profiles in yrig_dir(): "profile" (profile.json) first, then each
+ * other NAME.json's NAME by name, at most cap. The count, or -1 with the
+ * reason in err: no user folder, or one that others can write (yrig_dir()'s
+ * refusal, as the player gives it). */
+int  dsg_rig_list(char (*names)[DSG_RIG_NAME], int cap, char* err, size_t err_cap);
+/* yrig_load() of name ("profile": profile.json), and the calibration file
+ * that it names when the file's check is OK (ycol_cal_load()). 0 and *out,
+ * or -1 with the reason in err. */
+int  dsg_rig_load(const char* name, dsg_rig** out, char* err, size_t cap);
+void dsg_rig_free(dsg_rig* r);                   /* NULL is a no-op */
+const char* dsg_rig_name(const dsg_rig* r);
+/* The profile's file, for "Show" (its folder) and the Run view. */
+const char* dsg_rig_path(const dsg_rig* r);
+/* pl_check_desc.rig and pl_sim_desc.rig. Never NULL for a loaded rig. */
+const struct yrig_profile* dsg_rig_profile(const dsg_rig* r);
+/* pl_check_desc.cal and pl_sim_desc.cal: NULL when the profile names no
+ * calibration, or its file's check is not OK. The calibration need goes
+ * only when the profile's check passed and this is given (Part P). */
+const struct ycol_cal* dsg_rig_cal(const dsg_rig* r);
+/* The profile's file or its calibration file changed size or modification
+ * time since the load, or went (a stat each: at most once a second). */
+bool dsg_rig_changed(const dsg_rig* r);
+/* One line for the preview's banner: "Rig: NAME (view 570 mm, 1920 px over
+ * 518.4 mm)", or "Rig: NAME (no view)". snprintf's return. */
+int  dsg_rig_summary(const dsg_rig* r, char* out, size_t cap);
+/* The preview's pointer for a relative signal role (Part P, P2: with a
+ * profile that has the role's signal, pl_sim_sample() takes a raw mouse's
+ * counts through the profile's adapter, not role units). out: counts per
+ * role unit for x and y, 1 / (per_count x yrig_units_factor(the signal's
+ * units, role_units)), with its sign. role_units: YRIG_UNITS_*. false when
+ * the profile has no signal for the role or the units do not convert: then
+ * a sample is in role units at gain 1, as with no profile. */
+bool dsg_rig_counts_per_unit(const dsg_rig* r, const char* role, int role_units, double out[2]);
+
+/* --- step 6: Build (build.c, part B; docs/designer.md, "Build") ----------- */
+
+enum { DSG_BUILD_NONE = 0, DSG_BUILD_OK, DSG_BUILD_FAILED, DSG_BUILD_CANCELED };
+
+/* One source of a build's stamp: the description, the definition and each
+ * resource's source as the description names them. */
+typedef struct dsg_build_source {
+    const char* path;             /* absolute                                */
+    int64_t     size;             /* -1: missing at the build                */
+    int64_t     mtime_ns;
+} dsg_build_source;
+
+/* What a Build gives. Every pointer stays valid until the next
+ * dsg_build_take() that returns true, or dsg_builder_stop(). */
+typedef struct dsg_build_result {
+    uint64_t    revision;         /* the post's: the document as saved       */
+    int         status;           /* DSG_BUILD_*                             */
+    /* DSG_FROM_BUILD issues: the error line and each "warning:" line, with
+     * the definition's place ("line N, column M", as the check's) or a
+     * table's (dsg_csv_place(), which the tables view reads). The order of
+     * dsg_report: errors first. status is DSG_CHECK_NONE. */
+    dsg_report  report;
+    const char* path;             /* the pack (decision 1)                   */
+    int64_t     size;             /* its bytes; 0 unless OK                  */
+    char        pack_id[72];      /* ypak_id(): "sha256:..."; "" unless OK   */
+    double      ms;               /* the build's time                        */
+    int64_t     done_unix_s;      /* when it ended                           */
+    const dsg_build_source* sources;   /* the stamp                          */
+    int         n_sources;
+} dsg_build_result;
+
+typedef struct dsg_builder dsg_builder;
+typedef struct dsg_builder_desc {
+    /* On the build thread when a result is ready: main.cpp pushes the check
+     * thread's event (UiPlatform.wake). NULL: none. */
+    void (*wake)(void* ctx);
+    void* ctx;
+    /* No thread: a job runs in dsg_build_wait() (tests; WebAssembly). */
+    bool  no_thread;
+} dsg_builder_desc;
+
+/* The build thread: a yrt_pump as the check thread's (SCHED_OTHER with
+ * explicit attributes, never elevated, blocks when idle). NULL with the
+ * reason in err. */
+dsg_builder* dsg_builder_start(const dsg_builder_desc* d, char* err, size_t cap);
+/* Cancels the build that runs, drops a waiting one, joins, frees. NULL is a
+ * no-op. */
+void dsg_builder_stop(dsg_builder* b);
+/* PROJECT/build/NAME.ysppak, NAME the project folder's name (decision 1).
+ * 0, or -1 when it does not fit. */
+int  dsg_build_path(const dsg_project* p, char* out, size_t cap);
+/* Posts a Build of p's description from the files (decision 2: the caller
+ * saved first) to out_path, with the entry cache in DSG_CACHE_DIR. One job
+ * at a time; a post while one waits replaces it (newest wins). Copies what
+ * it reads. 0, or -1 with the reason in err. */
+int  dsg_build_post(dsg_builder* b, const dsg_project* p, const char* out_path, uint64_t revision, char* err, size_t cap);
+/* The running build stops before its next entry (ypt_options.cancel,
+ * YPT_ERR_CANCELED: no pack); a waiting one is dropped. */
+void dsg_build_cancel(dsg_builder* b);
+/* A job waits or runs. */
+bool dsg_build_busy(const dsg_builder* b);
+/* On the UI thread: the newest result since the last take. */
+bool dsg_build_take(dsg_builder* b, const dsg_build_result** out);
+/* Blocks until every job posted so far has posted its result, for at most
+ * timeout_ns. 0, or -1 on the timeout. With no_thread, runs them. */
+int  dsg_build_wait(dsg_builder* b, int64_t timeout_ns);
+/* Run builds first when this is true: no result, one not OK, another
+ * revision, or a source whose size or time is not the stamp's (a stat
+ * each). */
+bool dsg_build_stale(const dsg_project* p, const dsg_build_result* r, uint64_t revision);
+/* The check pack's build, on the check thread: check.c's build() calls it
+ * in place of its own ypt_build_text() of desc (the check's description,
+ * whose sources are in p->folder) into out_path. Part B owns it: the entry
+ * cache (DSG_CACHE_DIR, its bound) and any skip of a build whose inputs did
+ * not change. Only folder, desc_path, desc and desc_len of p are read (the
+ * check job's copy). Part S's stub is check.c's call as before step 6. 0
+ * with the pack at out_path, or -1 with the reason in err. */
+int  dsg_build_check_pack(const dsg_project* p, const char* desc, size_t desc_len, const char* out_path, char* err, size_t cap);
+
+/* --- step 6: Run (run.c and run_part.c; docs/designer.md, "Run", "Stop") --- */
+
+#define DSG_RUN_ROLES       16
+#define DSG_RUN_MAX_SECONDS 600.0   /* --max-seconds with --sim (decision 10) */
+#define DSG_RUN_REDRAW_HZ   2       /* the UI's frames a second for a run's progress */
+#define DSG_RUN_KILL_AFTER_NS 5000000000LL   /* Kill shows 5 s after a Stop  */
+#define DSG_RUN_LOG_LINES   200     /* the log's last lines that the view shows */
+
+typedef struct dsg_run_gain {
+    char   role[32];
+    double units;                 /* role units a count                       */
+} dsg_run_gain;
+
+/* The Run view's settings ("The command line"); the view file's part "run"
+ * keeps all but out_dir. */
+typedef struct dsg_run_settings {
+    char     rig[DSG_RIG_NAME];   /* --rig NAME, and the check's profile;
+                                   * "": no --rig (a real run then takes
+                                   * profile.json if there is one)           */
+    bool     sim;                 /* --sim                                   */
+    char     participant[32];     /* --participant SPEC with --sim; "": none */
+    int32_t  n_fields;
+    dsg_session_field fields[DSG_SESSION_FIELDS];   /* --field NAME=VALUE    */
+    char     seed[24];            /* --seed N; "": the player draws one      */
+    int32_t  n_below;
+    char     allow_below_tier[DSG_RUN_ROLES][32];   /* --allow-below-tier R,R */
+    bool     windowed;            /* --windowed                              */
+    double   max_seconds;         /* --max-seconds with --sim                */
+    int32_t  n_gains;
+    dsg_run_gain gains[DSG_RUN_ROLES];  /* --sim-gain ROLE=UNITS with --sim  */
+    char     out_dir[DSG_PATH_MAX];     /* "": dsg_run_out_dir()'s           */
+} dsg_run_settings;
+
+/* run_part.c (part S): not simulated, no rig, no fields, max_seconds
+ * DSG_RUN_MAX_SECONDS. */
+void dsg_run_settings_default(dsg_run_settings* s);
+/* The view file's part "run": {"open": bool, "rig": NAME, "sim": bool,
+ * "participant": SPEC, "fields": {NAME: "VALUE"}, "seed": "N",
+ * "allow_below_tier": [ROLE], "windowed": bool, "max_seconds": s,
+ * "gains": {ROLE: units}}. A key that is missing, of another type or out of
+ * range takes its default, and so does every key when the part is missing
+ * or does not parse. open: the Run view shows in the AUX pane. */
+void dsg_run_part_read(const dsg_view* v, dsg_run_settings* s, bool* open);
+/* Writes every key, defaults too. 0, or -1 when the parts are full. */
+int  dsg_run_part_write(dsg_view* v, const dsg_run_settings* s, bool open);
+
+/* The player's command line: argv[0] the player, argv[argc] NULL. */
+#define DSG_RUN_ARGV 96
+typedef struct dsg_run_argv {
+    const char* argv[DSG_RUN_ARGV];
+    int         argc;
+    char        buf[32768];       /* the strings that argv points at         */
+} dsg_run_argv;
+/* "Run", "The command line": player PACK --out DIR [--rig NAME] [--seed N]
+ * [--field NAME=VALUE]... [--allow-below-tier R,R] [--windowed] [--sim
+ * --max-seconds S [--sim-gain ROLE=UNITS]... [--participant SPEC]]. A pure
+ * function. 0, or -1 with the reason in err: a value does not fit, or the
+ * environment variable YSP_DESIGNER_TEST is set and s->sim is false (no test
+ * starts a real run). */
+int  dsg_run_args(const dsg_run_settings* s, const char* player, const char* pack, const char* out_dir, dsg_run_argv* out,
+                  char* err, size_t cap);
+/* folder/data/PARTICIPANT_YYYYMMDD-HHMMSS (decision 11): the session field
+ * "participant" (s->fields), UTC. 0, or -1 when it does not fit. */
+int  dsg_run_out_dir(const char* folder, const dsg_run_settings* s, int64_t now_unix_s, char* out, size_t cap);
+/* What an exit status means ("What the Run view shows"): 0 done, 1 refused
+ * or failed, 2 a bad argument, 3 stopped, 99 the panic watchdog, -S a
+ * signal. Into buf; gives buf. */
+const char* dsg_run_exit_text(int status, char* buf, size_t cap);
+/* `player --version`'s version ("0.18.0") into out, its output in a file
+ * under tmp_dir. 0, or -1 with the reason in err. */
+int  dsg_player_version(const char* player, const char* tmp_dir, char* out, size_t cap, char* err, size_t err_cap);
+
+enum { DSG_RUN_STARTING = 1, DSG_RUN_RUNNING, DSG_RUN_STOPPING, DSG_RUN_ENDED };
+
+typedef struct dsg_run dsg_run;
+typedef struct dsg_run_desc {
+    const char* const* argv;      /* dsg_run_args()'s; argv[0] absolute       */
+    const char* cwd;              /* the project's folder                     */
+    const char* out_dir;          /* --out's DIR: its trials.csv is read; the
+                                   * output goes to DIR.log beside it         */
+    const char* tmp_dir;          /* dsg_player_version()'s: PROJECT/.designer */
+    bool        sim;              /* --sim: on Windows Stop cannot reach it   */
+    void (*wake)(void* ctx);      /* dsg_proc_desc.wake: on the watch thread  */
+    void* ctx;
+    int64_t     now_ns;           /* the UI's clock at the start              */
+} dsg_run_desc;
+/* Refuses a player of another version than the linked player library's
+ * (dsg_player_version(), decision 5), makes out_dir's parent, and starts
+ * the player (dsg_proc_start(), its output in DIR.log, trials.csv watched).
+ * Copies what it reads of d. 0, or -1 with the reason in err, and then
+ * nothing runs. */
+int  dsg_run_start(dsg_run** out, const dsg_run_desc* d, char* err, size_t cap);
+/* Stop (decision 8): 1 the request went out; 0 it did not (the player had
+ * ended, or a --sim run on Windows, Part P): Kill is offered at once. */
+int  dsg_run_stop(dsg_run* r, int64_t now_ns);
+/* Kill: only after a Stop (the view warns that the display's mode and
+ * gamma ramp may stay changed). */
+void dsg_run_kill(dsg_run* r);
+/* On the UI thread, once a frame: polls the process, and reads the log's
+ * and trials.csv's new bytes when their sizes changed. true when the info
+ * changed. Allocates only when a buffer grows; never blocks. */
+bool dsg_run_tick(dsg_run* r, int64_t now_ns);
+
+typedef struct dsg_run_info {
+    int         state;            /* DSG_RUN_*                                */
+    int64_t     elapsed_ns;       /* the start to now, or to the end          */
+    int         trials;           /* trials.csv's rows                        */
+    const char* last_response;    /* the last row's (by column name); ""      */
+    const char* last_outcome;
+    double      last_rt_s;        /* < 0: none                                */
+    const char* log;              /* the log's last DSG_RUN_LOG_LINES lines   */
+    int         exit_status;      /* ENDED: the code >= 0, or -signal         */
+    const char* exit_text;        /* dsg_run_exit_text(), with the log's last
+                                   * line for 1; "" until the end             */
+    bool        kill_offered;     /* DSG_RUN_KILL_AFTER_NS after a Stop that
+                                   * went out, at once after one that did not */
+    const char* out_dir;
+    const char* log_path;
+    const char* command;          /* the command line, quoted (for exit 2)    */
+} dsg_run_info;
+/* Pointers valid until the next dsg_run_tick(), _stop(), _kill() or
+ * _free(). */
+void dsg_run_get_info(const dsg_run* r, dsg_run_info* out);
+/* A failed run's issue (exit 1: the log's last line; DSG_FROM_PLAYER_RUN,
+ * an error, rig true when the run had --rig and the line names the rig).
+ * false: none. Pointers as dsg_run_get_info()'s. */
+bool dsg_run_issue(const dsg_run* r, dsg_issue* out);
+/* Frees the run. A player that still runs is left running ("Leave it
+ * running"): its output goes to its log (decision 6). NULL is a no-op. */
+void dsg_run_free(dsg_run* r);
 
 /* --- the redraw rule ----------------------------------------------------- */
 

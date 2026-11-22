@@ -287,7 +287,7 @@ static void post_check(U* u) {
     size_t n = 0;
     const char* t = dsg_doc_bytes(u->doc, DSG_BUF_DEF, &n);
     const uint64_t rev = dsg_doc_revision(u->doc);
-    if (dsg_worker_check(u->w, &u->proj, t, n, u->doc, rev) == 0) u->posted = rev;
+    if (dsg_worker_check(u->w, &u->proj, t, n, u->doc, rev, NULL) == 0) u->posted = rev;
     (void)dsg_worker_wait(u->w, 0);
 }
 

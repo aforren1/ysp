@@ -5,7 +5,8 @@
 // (view_chart.cpp, view_tables.cpp, view_panels.cpp, view_preview.cpp),
 // listed once in views.cpp. A view edits only through the document
 // (designer/core/doc.h) and keeps its own state in its part of the view file
-// (dsg_view_part_get/set, under its id). Frozen during step 5 (part S).
+// (dsg_view_part_get/set, under its id). Frozen during step 5 and step 6
+// (part S).
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -17,10 +18,12 @@ enum UiSlot {
     UI_SLOT_MAIN = 0,   // the main area: one of these shows, by the switch
     UI_SLOT_SIDE = 1,   // the side column: always shown (the panels)
     // Step 5: a pane at the right of the main area, beside whichever main
-    // view shows (so the chart and the preview show at once). A toolbar
-    // check box shows or hides it; the view file's part "preview" keeps
-    // that ("open"). Its views stack in it, each a child window named by
-    // its label ("//##designer/Preview").
+    // view shows (so the chart and the preview show at once). Step 6: each
+    // AUX view has its own toolbar check box ("//##designer/aux/LABEL"); the
+    // pane shows while one is ticked, and the ticked views stack in it, each
+    // a child window named by its label ("//##designer/Preview",
+    // "//##designer/Run"). The view file keeps each one's "open" in its
+    // part ("preview", "run").
     UI_SLOT_AUX = 2
 };
 
@@ -89,9 +92,52 @@ int64_t ui_now_ns();
 // session shows. Each call reads it again; the strings stay valid until a
 // call that changes the preview (preview.h, "Pointers").
 const dsg_preview_where* ui_preview_where();
-// The AUX pane, as its toolbar check box shows and hides it.
+// The Preview view in the AUX pane, as its toolbar check box shows and hides
+// it (step 5's names: the Preview was the pane's only view).
 bool ui_aux_open();
 void ui_show_aux(bool open);
+// Step 6: any AUX view by its id ("preview", "run"); false for no such view.
+bool ui_aux_view_open(const char* id);
+void ui_show_aux_view(const char* id, bool open);
 // Opens a file outside the project read-only in the first view whose
 // open_file hook takes it, and shows that view; false when none does.
 bool ui_open_file(const char* path);
+
+// Step 6, Build and Run (docs/designer.md, "Plan of step 6"). ui.cpp owns
+// the builder (dsg_builder_*), the run (dsg_run_*) and the run's settings,
+// which it keeps in the view file's part "run". The Run view (part V) shows
+// them and calls these, which do what the toolbar's buttons do.
+//
+// Build: Save, then a Build of the files into dsg_build_path(); false when
+// refused (no project, a Build or a run goes, Save failed), the status says
+// why. Disabled in the toolbar as ui_can_build() says.
+bool ui_build();
+bool ui_can_build();
+bool ui_build_busy();                    // a Build waits or runs
+// The last Build's result since the open, NULL: none. Valid until the frame
+// that takes the next one.
+const dsg_build_result* ui_build_last();
+// dsg_build_stale() of the last Build for the document's revision (a stat
+// a source: once a second at most).
+bool ui_build_stale();
+// Run: enabled when a project is open, the check of the document's current
+// revision came back with no error, and no Build or run goes. Run builds
+// first when the pack is stale, then starts the player with the settings
+// (decision 11's folder when out_dir is ""). false when refused; the status
+// says why. A real run (not sim) closes the preview's session until it
+// ends (decision 9).
+bool ui_can_run();
+bool ui_run_start();
+// Stop: dsg_run_stop()'s answer (0: Kill now). Kill: only after a Stop.
+int  ui_run_stop();
+void ui_run_kill();
+// The last run since the open (it may have ended), NULL: none. Read it with
+// dsg_run_get_info() and dsg_run_issue(); valid until the next frame.
+const dsg_run* ui_run();
+// The run's settings, which the Run view edits in place. A change of rig
+// posts a check with the new profile at the next frame; the next Run takes
+// the rest.
+dsg_run_settings* ui_run_settings();
+// A check of the current text now, though nothing changed (a rig profile's
+// file changed: dsg_rig_changed()).
+void ui_check_again();

@@ -29,6 +29,7 @@ struct App {
     SDL_GLContext gl = nullptr;
     Uint32 dialog_event = 0;   // the folder dialog's answer, on the main thread
     Uint32 check_event = 0;    // a result of the check thread is ready
+    Uint32 run_event = 0;      // a run's watch thread saw progress (step 6)
     dsg_redraw redraw = {};
     bool quit = false;
     // The first gfx on the window's context (docs/designer.md, "Part S as
@@ -38,6 +39,7 @@ struct App {
     ygfx_gfx gfx = {};
     ygfx_gl_caps caps = {};
     bool have_gfx = false;
+    char player[DSG_PATH_MAX] = "";   // the ysp_player beside the designer
 };
 App A;
 
@@ -103,10 +105,21 @@ void SDLCALL check_done(void*) {
     SDL_PushEvent(&e);
 }
 
+// On a run's watch thread: wakes the loop without counting as input, so the
+// frame comes when ui_run_wait_ms() says (DSG_RUN_REDRAW_HZ at most).
+void SDLCALL run_progress(void*) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = A.run_event;
+    SDL_PushEvent(&e);
+}
+
 void set_title(void*, const char* t) { SDL_SetWindowTitle(A.win, t); }
 void quit(void*) { A.quit = true; }
 
 void handle(const SDL_Event& e) {
+    // not input: the loop's wait asks ui_run_wait_ms() when to draw
+    if (e.type == A.run_event) return;
     // The preview's keys are physical (scancodes), as the player's choices
     // are, so they come from SDL, not from ImGui's layout-mapped keys. A key
     // down that the preview takes does not reach ImGui; a key up always
@@ -189,8 +202,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ysp_designer: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    A.dialog_event = SDL_RegisterEvents(2);
+    A.dialog_event = SDL_RegisterEvents(3);
     A.check_event = A.dialog_event + 1;
+    A.run_event = A.dialog_event + 2;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -235,6 +249,20 @@ int main(int argc, char** argv) {
     plat.quit = quit;
     plat.wake = check_done;
     plat.now_ns = now_ns;
+#ifndef __EMSCRIPTEN__
+    // Step 6 (decision 5): the player that CMake put beside the designer.
+    // SDL_GetBasePath() is absolute and ends in a separator, as Part X's
+    // start with a working folder needs.
+    if (base) {
+#ifdef _WIN32
+        snprintf(A.player, sizeof A.player, "%sysp_player.exe", base);
+#else
+        snprintf(A.player, sizeof A.player, "%sysp_player", base);
+#endif
+        plat.player_path = A.player;
+    }
+    plat.wake_run = run_progress;
+#endif
     // The first gfx, on this thread and the window's context, before
     // ui_init() starts the check thread: the sessions that the thread loads
     // record their gfx with its caps. Its open is also the process's first
@@ -259,12 +287,17 @@ int main(int argc, char** argv) {
         // Redraw on input only: block until an event unless a frame is due.
         // ImGui applies one key or button change a frame, so a frame is due
         // while its input queue holds events (designer_ui_probe.md, part 1).
-        const int wait = dsg_redraw_wait_ms(&A.redraw, queued(), ui_animating());
-        if (wait < 0 ? SDL_WaitEvent(&e) : SDL_PollEvent(&e)) {
+        // A run's progress brings a frame at most DSG_RUN_REDRAW_HZ times a
+        // second (decision 9): the wait times out when one is due.
+        int wait = dsg_redraw_wait_ms(&A.redraw, queued(), ui_animating());
+        const int run_wait = ui_run_wait_ms();
+        if (run_wait >= 0 && (wait < 0 || run_wait < wait)) wait = run_wait;
+        const bool got = wait < 0 ? SDL_WaitEvent(&e) : wait > 0 ? SDL_WaitEventTimeout(&e, wait) : SDL_PollEvent(&e);
+        if (got) {
             handle(e);
             while (SDL_PollEvent(&e)) handle(e);
         }
-        if (!A.quit && dsg_redraw_due(&A.redraw, queued(), ui_animating())) draw_frame();
+        if (!A.quit && (dsg_redraw_due(&A.redraw, queued(), ui_animating()) || ui_run_wait_ms() == 0)) draw_frame();
     }
     // the sessions are detached and closed by now; the first gfx goes with
     // the context current

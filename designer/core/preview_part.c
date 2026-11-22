@@ -131,6 +131,11 @@ void dsg_preview_part_read(const dsg_view* v, dsg_preview_settings* s, bool* ope
         }
     }
     {
+        /* step 6: the preview's rig profile; "" the built-in simulated rig */
+        char rig[sizeof s->session.rig] = "";
+        if (get_str(yjs_get(root, "rig"), rig, sizeof rig)) memcpy(s->session.rig, rig, sizeof rig);
+    }
+    {
         size_t sn = 0;
         const char* sc = yjs_string(yjs_get(root, "scale"), &sn);
         if (sc && sn == 3 && memcmp(sc, "1:1", 3) == 0) s->scale = DSG_PV_SCALE_1TO1;
@@ -169,6 +174,7 @@ int dsg_preview_part_write(dsg_view* v, const dsg_preview_settings* s, bool open
         bad |= yjs_set(&a, fields, s->session.fields[i].name, yjs_new_stringz(&a, s->session.fields[i].value));
     bad |= yjs_set(&a, root, "fields", fields);
     bad |= yjs_set(&a, root, "scale", yjs_new_stringz(&a, s->scale == DSG_PV_SCALE_1TO1 ? "1:1" : "fit"));
+    bad |= yjs_set(&a, root, "rig", yjs_new_stringz(&a, s->session.rig));
     if (!bad) {
         size_t n = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
         char* buf = n ? (char*)yjs_alloc(&a, n + 1) : NULL;

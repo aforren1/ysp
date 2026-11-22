@@ -33,11 +33,13 @@ endfunction()
 # the chart (chart.c, part A), the tables (csv.c, part B) and the panels'
 # fields (schema.c, part C). Step 5: the check thread (worker.c, part T),
 # the preview (preview.c, part A) and its view file part (preview_part.c,
-# shared).
+# shared). Step 6: Build (build.c, part B), Run (run.c, part R), rig
+# profiles (rig.c, part G) and the Run view's file part (run_part.c, shared).
 add_library(ysp_designer_core STATIC
     core/dsg.h core/check.c core/locate.c core/platform.c core/project.c core/redraw.c
     core/doc.h core/doc.c core/chart.h core/chart.c core/csv.h core/csv.c core/schema.h core/schema.c
-    core/worker.c core/preview.h core/preview.c core/preview_part.c)
+    core/worker.c core/preview.h core/preview.c core/preview_part.c
+    core/build.c core/run.c core/rig.c core/run_part.c)
 target_include_directories(ysp_designer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
 target_compile_definitions(ysp_designer_core PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
 target_link_libraries(ysp_designer_core PUBLIC ysp_player_lib ysp_pack_tool_code ysp_player_impl)
@@ -176,7 +178,7 @@ set_target_properties(ysp_designer_skb PROPERTIES C_STANDARD 17 C_STANDARD_REQUI
 # compiler and no C++ runtime (docs/imgui_probe.md, finding 6).
 set(_ui_sources app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
     app/views.h app/views.cpp app/view_chart.cpp app/view_tables.h app/view_tables.cpp app/view_panels.cpp
-    app/view_preview.cpp
+    app/view_preview.cpp app/view_run.cpp
     ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp)
 add_library(ysp_designer_ui STATIC ${_ui_sources})
 target_include_directories(ysp_designer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
@@ -211,8 +213,10 @@ if(YSP_BUILD_TESTS)
     # input, its textures accepted without a renderer.
     # Step 5, part B: preview_double.c stands in for preview.c until part A
     # merges (tests/designer/preview_double.h says how to take it out).
+    # Step 6, part S: build_run_double.c stands in for build.c and run.c, for
+    # ui.cpp's Build and Run (tests/designer/build_run_double.h).
     add_executable(test_designer_ui ${PROJECT_SOURCE_DIR}/tests/designer/ui_test.cpp
-        ${PROJECT_SOURCE_DIR}/tests/designer/preview_double.c)
+        ${PROJECT_SOURCE_DIR}/tests/designer/preview_double.c ${PROJECT_SOURCE_DIR}/tests/designer/build_run_double.c)
     target_link_libraries(test_designer_ui PRIVATE ysp_designer_ui)
     target_compile_definitions(test_designer_ui PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
@@ -223,7 +227,7 @@ if(YSP_BUILD_TESTS)
     # sessions loading on the check thread (parts 9 and 10 need the double).
     add_executable(test_designer_ui_real ${PROJECT_SOURCE_DIR}/tests/designer/ui_test.cpp)
     target_link_libraries(test_designer_ui_real PRIVATE ysp_designer_ui)
-    target_compile_definitions(test_designer_ui_real PRIVATE DSG_PREVIEW_DOUBLE=0 YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    target_compile_definitions(test_designer_ui_real PRIVATE DSG_PREVIEW_DOUBLE=0 DSG_BUILD_RUN_DOUBLE=0 YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
     set_target_properties(test_designer_ui_real PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui_real COMMAND test_designer_ui_real ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_real_work)
@@ -317,6 +321,15 @@ target_link_libraries(ysp_designer PRIVATE ysp_designer_ui SDL3::SDL3 ${YSP_GLES
 # links libstdc++ for one symbol of the vendored HarfBuzz
 # (std::__throw_system_error), as ypak does (docs/designer.md).
 set_target_properties(ysp_designer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+# Step 6 (decision 5): Run starts the ysp_player beside the designer, of the
+# same version. A copy, made at every build (copy_if_different), so a
+# player rebuilt alone is beside the designer too. Not for a browser.
+if(TARGET ysp_player AND NOT EMSCRIPTEN)
+    add_custom_target(ysp_player_beside_designer ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:ysp_player> $<TARGET_FILE_DIR:ysp_designer>
+        DEPENDS ysp_player
+        COMMENT "ysp_player beside ysp_designer")
+endif()
 
 # Step 5, part D: the preview on a GL context (EGL's device platform, a
 # pbuffer, no window): framebuffer 0 against the session's texture, and

@@ -34,6 +34,17 @@ struct UiPlatform {
     struct ygfx_gfx* gl_share;
     dsg_gl_fn (*gl_proc)(void* ctx, const char* name);
     void* gl_proc_ctx;
+    // Step 6. The ysp_player beside the designer, absolute (main.cpp:
+    // SDL_GetBasePath() and "ysp_player", ".exe" on Windows). NULL: Run
+    // says that there is no player (the web; the tests that start none).
+    // Kept by the caller until ui_shutdown() returns.
+    const char* player_path;
+    // On a run's watch thread (dsg_run_desc.wake) when the player's log or
+    // trials.csv grew or the player ended: post an event that wakes the
+    // loop and is not input, so it brings no settle frames. The loop then
+    // draws when ui_run_wait_ms() says, at most DSG_RUN_REDRAW_HZ frames a
+    // second. NULL: none (the tests call ui_run_wait_ms() themselves).
+    void (*wake_run)(void* ctx);
 };
 
 bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t cap);
@@ -67,8 +78,24 @@ bool ui_preview_has_keyboard();
 // pauses.
 void ui_set_window_shown(bool shown);
 
+// Step 6. A run's player may still run: started, and not yet seen to end.
+// ui_request_quit() asks first while this is true (Stop the run, Leave it
+// running, Cancel).
+bool ui_run_active();
+// How long the loop may wait before it draws a frame for a run's progress,
+// ms: -1 none is due (block on events), 0 now. A run's wake-up makes one
+// due, DSG_RUN_REDRAW_HZ times a second at most; every frame drawn takes
+// the run's progress and clears it.
+int ui_run_wait_ms();
+// Blocks until every Build posted so far has run, so the next frame takes
+// its result (the tests, as ui_wait_checks()).
+bool ui_wait_builds(int64_t timeout_ns);
+
 // For the test and the platform layer.
 const dsg_project* ui_project();      // NULL when none is open
+// The merged report (step 6): the check's issues, then the last Build's
+// (DSG_FROM_BUILD), then a failed run's (DSG_FROM_PLAYER_RUN). status,
+// built, have_pack and rig are the check's; n_errors counts all.
 const dsg_report* ui_report();
 SkfField* ui_editor();
 const char* ui_text(size_t* n);      // the editor's text as last read
