@@ -62,6 +62,8 @@
 #include <dirent.h>
 #include <utime.h>
 #include <pthread.h>
+#include <sched.h>
+#include <signal.h>
 #include <unistd.h>
 #define MKDIR(p) mkdir(p, 0777)
 #define RMDIR(p) rmdir(p)
@@ -2946,9 +2948,124 @@ static void test_color_pack(void) {
     free(f0.d); free(f1.d); free(fx.d);
 }
 
+#if defined(__linux__)
+/* The ffmpeg step's child (tool v0.12.0, part K2): only descriptors 0 to
+ * 2, SCHED_OTHER, SIGPIPE at its default. This test program stands in
+ * for ffmpeg: with YPT_FAKE_FFMPEG_LOG set, main() comes here, appends
+ * "fds 0 1 2 policy 0 sigpipe 0" (what it has) to that file, prints a
+ * version line and ends. */
+static int fake_ffmpeg(const char* log) {
+    int fds[64], n = 0, i, policy = sched_getscheduler(0);
+    struct sigaction sa;
+    DIR* d = opendir("/proc/self/fd");
+    FILE* f;
+    if (d) {
+        struct dirent* de;
+        while ((de = readdir(d)) != NULL && n < 64) {
+            int v;
+            if (de->d_name[0] == '.') continue;
+            v = atoi(de->d_name);
+            if (v != dirfd(d)) fds[n++] = v;
+        }
+        closedir(d);
+    }
+    memset(&sa, 0, sizeof sa);
+    sigaction(SIGPIPE, NULL, &sa);
+    f = fopen(log, "a");
+    if (f) {
+        fprintf(f, "fds");
+        for (i = 0; i < n; i++) fprintf(f, " %d", fds[i]);
+        fprintf(f, " policy %d sigpipe %d\n", policy, sa.sa_handler == SIG_IGN);
+        fclose(f);
+    }
+    printf("ffmpeg version 0.0-fdtest Copyright (c) the test\n");
+    return 0;
+}
+
+static int int_cmp(const void* a, const void* b) { return *(const int*)a - *(const int*)b; }
+
+/* Each line of the log: its descriptors sorted are 0 1 2, the policy and
+ * SIGPIPE as wanted. The number of good lines, or -1 for a bad one. */
+static int fds_ok(const char* log, int policy) {
+    size_t n;
+    uint8_t* d = read_all(log, &n);
+    char* line;
+    char* save = NULL;
+    int good = 0;
+    if (!d) return -1;
+    d[n] = 0;
+    for (line = strtok_r((char*)d, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        int v[64], k = 0, pol = -1, sp = -1;
+        char* tok;
+        char* s2 = NULL;
+        for (tok = strtok_r(line, " ", &s2); tok; tok = strtok_r(NULL, " ", &s2)) {
+            if (!strcmp(tok, "fds")) continue;
+            if (!strcmp(tok, "policy")) { tok = strtok_r(NULL, " ", &s2); pol = tok ? atoi(tok) : -1; continue; }
+            if (!strcmp(tok, "sigpipe")) { tok = strtok_r(NULL, " ", &s2); sp = tok ? atoi(tok) : -1; continue; }
+            if (k < 64) v[k++] = atoi(tok);
+        }
+        qsort(v, (size_t)k, sizeof v[0], int_cmp);
+        if (k != 3 || v[0] != 0 || v[1] != 1 || v[2] != 2 || pol != policy || sp != 0) { printf("ffmpeg's child: %s\n", log); good = -1; break; }
+        good++;
+    }
+    free(d);
+    return good;
+}
+
+static void test_ffmpeg_child(void) {
+    static const char t[] =
+        "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+        "  {\"kind\": \"video\", \"name\": \"video/fd.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-f\", \"mpeg\"]}]}\n";
+    char self[1024], err[1024];
+    ssize_t k = readlink("/proc/self/exe", self, sizeof self - 1);
+    ypt_options o;
+    FILE* extra;
+    int rc, lines;
+    struct sigaction ign, old;
+    if (k <= 0) { CHECK(0, "no /proc/self/exe"); return; }
+    self[k] = 0;
+    /* a descriptor the tool did not open, without close-on-exec, and
+     * SIGPIPE ignored, as a GUI program has them */
+    extra = fopen(W "/extra_fd.txt", "w");
+    memset(&ign, 0, sizeof ign);
+    ign.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &ign, &old);
+    remove(W "/fake_ffmpeg.log");
+    setenv("YPT_FAKE_FFMPEG_LOG", W "/fake_ffmpeg.log", 1);
+    memset(&o, 0, sizeof o);
+    o.ffmpeg = self;
+    rc = ypt_build_text(t, strlen(t), W, W "/fd.ysppak", &o, err, sizeof err);
+    lines = fds_ok(W "/fake_ffmpeg.log", SCHED_OTHER);
+    CHECK(rc < 0 && lines == 2, "ffmpeg's child (-version, then the encode) has only descriptors 0 to 2, SCHED_OTHER and SIGPIPE at its default (%d lines): %s", lines, err);
+    {   /* from a SCHED_FIFO thread (an rtprio grant; skipped without) */
+        struct sched_param sp, sp0;
+        int pol0 = 0;
+        pthread_getschedparam(pthread_self(), &pol0, &sp0);
+        memset(&sp, 0, sizeof sp);
+        sp.sched_priority = 1;
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0) {
+            remove(W "/fake_ffmpeg.log");
+            rc = ypt_build_text(t, strlen(t), W, W "/fd.ysppak", &o, err, sizeof err);
+            pthread_setschedparam(pthread_self(), pol0, &sp0);
+            lines = fds_ok(W "/fake_ffmpeg.log", SCHED_OTHER);
+            CHECK(rc < 0 && lines == 2, "ffmpeg's child of a SCHED_FIFO thread: SCHED_OTHER (%d lines)", lines);
+        } else {
+            printf("tool_test: ffmpeg's child from a SCHED_FIFO thread skipped (no rtprio grant)\n");
+        }
+    }
+    unsetenv("YPT_FAKE_FFMPEG_LOG");
+    sigaction(SIGPIPE, &old, NULL);
+    if (extra) fclose(extra);
+    CHECK(!exists(W "/fd.ysppak") && !exists(W "/fd.ysppak.tmp"), "the fake ffmpeg's build leaves no pack");
+}
+#endif
+
 int main(void) {
     char err[1024];
     int rc;
+#if defined(__linux__)
+    if (getenv("YPT_FAKE_FFMPEG_LOG")) return fake_ffmpeg(getenv("YPT_FAKE_FFMPEG_LOG"));
+#endif
     make_sources();
     rc = build_text(g_desc, W "/corpus.ysppak", err, sizeof err);
     CHECK(rc == 0, "build: %s", err);
@@ -3113,6 +3230,9 @@ int main(void) {
     test_v2_pack();
     test_resample();
     test_ffmpeg_refusals();
+#if defined(__linux__)
+    test_ffmpeg_child();
+#endif
     test_video();
     test_refusals();
     test_color_pack();

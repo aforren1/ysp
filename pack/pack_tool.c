@@ -3,8 +3,11 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
-/* fseeko, ftello and mkdir under -std=c11 (as ysp/rt.h does). */
-#if (defined(__linux__) || defined(__EMSCRIPTEN__)) && !defined(_DEFAULT_SOURCE) &&     !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+/* fseeko, ftello and mkdir under -std=c11 (as ysp/rt.h does); on Linux
+ * also posix_spawn_file_actions_addclosefrom_np() for the ffmpeg step. */
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE) && !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+#define _GNU_SOURCE 1
+#elif defined(__EMSCRIPTEN__) && !defined(_DEFAULT_SOURCE) && !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
 #define _DEFAULT_SOURCE 1
 #endif
 #ifndef YSCR_NO_SDL
@@ -50,6 +53,8 @@
 #include <utime.h>
 #if !defined(__EMSCRIPTEN__)
 #include <fcntl.h>
+#include <sched.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 extern char** environ;
@@ -2193,7 +2198,13 @@ static int build_texture(B* b, E* e) {
 /* Runs argv (argv[0] found on the PATH unless it is a path), its standard
  * output and error into out (the last cap - 1 bytes). Returns the exit
  * code, or -1 when the program does not start. No shell: every argument
- * reaches the program as given. */
+ * reaches the program as given. The program gets only its standard
+ * input (the null device), output and error: the process that links the
+ * tool (the designer) can hold a player's log, a pack or a window system
+ * connection, and a child that kept one open would keep it past its use.
+ * It also gets the default signal actions, no blocked signal and, on
+ * POSIX, SCHED_OTHER: a build thread is never meant to be elevated, but a
+ * thread under SCHED_FIFO would otherwise pass it on (docs/rt.md). */
 static int run_program(const char* const* argv, char* out, size_t cap) {
     size_t kept = 0;
     if (out && cap) out[0] = 0;
@@ -2204,10 +2215,13 @@ static int run_program(const char* const* argv, char* out, size_t cap) {
         wchar_t* w;
         int i, wn;
         SECURITY_ATTRIBUTES sa;
-        HANDLE rd = NULL, wr = NULL, nul;
-        STARTUPINFOW si;
+        HANDLE rd = NULL, wr = NULL, nul, list[2];
+        STARTUPINFOEXW si;
         PROCESS_INFORMATION pi;
         DWORD code = 0;
+        SIZE_T alen = 0;
+        LPPROC_THREAD_ATTRIBUTE_LIST attrs;
+        BOOL started;
         memset(&cl, 0, sizeof cl);
         for (i = 0; argv[i]; i++) {
             const char* a = argv[i];
@@ -2236,20 +2250,35 @@ static int run_program(const char* const* argv, char* out, size_t cap) {
         if (!CreatePipe(&rd, &wr, &sa, 0)) { free(w); return -1; }
         SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
         nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-        memset(&si, 0, sizeof si);
-        si.cb = sizeof si;
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = nul;
-        si.hStdOutput = wr;
-        si.hStdError = wr;
-        memset(&pi, 0, sizeof pi);
-        if (!CreateProcessW(NULL, w, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            free(w); CloseHandle(rd); CloseHandle(wr); if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        if (nul == INVALID_HANDLE_VALUE) { free(w); CloseHandle(rd); CloseHandle(wr); return -1; }
+        /* bInheritHandles must be TRUE for the standard handles, and then
+         * every inheritable handle of the process goes too unless a list
+         * names the ones that may */
+        list[0] = nul;
+        list[1] = wr;
+        InitializeProcThreadAttributeList(NULL, 1, 0, &alen);
+        attrs = alen ? (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(alen) : NULL;
+        if (!attrs || !InitializeProcThreadAttributeList(attrs, 1, 0, &alen)) {
+            free(attrs); free(w); CloseHandle(rd); CloseHandle(wr); CloseHandle(nul);
             return -1;
         }
+        memset(&si, 0, sizeof si);
+        si.StartupInfo.cb = sizeof si;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = nul;
+        si.StartupInfo.hStdOutput = wr;
+        si.StartupInfo.hStdError = wr;
+        si.lpAttributeList = attrs;
+        memset(&pi, 0, sizeof pi);
+        started = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, list, sizeof list, NULL, NULL) &&
+                  CreateProcessW(NULL, w, NULL, NULL, TRUE, CREATE_NO_WINDOW | NORMAL_PRIORITY_CLASS | EXTENDED_STARTUPINFO_PRESENT, NULL,
+                                 NULL, &si.StartupInfo, &pi);
+        DeleteProcThreadAttributeList(attrs);
+        free(attrs);
         free(w);
         CloseHandle(wr);
-        if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        CloseHandle(nul);
+        if (!started) { CloseHandle(rd); return -1; }
         for (;;) {
             char t[4096];
             DWORD got = 0;
@@ -2274,22 +2303,56 @@ static int run_program(const char* const* argv, char* out, size_t cap) {
     }
 #elif !defined(__EMSCRIPTEN__)
     {
-        int fd[2], st = 0;
+        int fd[2], st = 0, rc;
         pid_t pid;
         posix_spawn_file_actions_t fa;
+        posix_spawnattr_t at;
+        sigset_t all, none;
+        struct sched_param sp;
+        short flags = (short)(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK);
+        /* the pipe's ends are the tool's: close-on-exec, so that no other
+         * thread's child gets them, and where no closefrom runs */
+#if defined(__linux__)
+        if (pipe2(fd, O_CLOEXEC) != 0) return -1;
+#else
         if (pipe(fd) != 0) return -1;
-        posix_spawn_file_actions_init(&fa);
-        posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-        posix_spawn_file_actions_adddup2(&fa, fd[1], 1);
-        posix_spawn_file_actions_adddup2(&fa, fd[1], 2);
-        posix_spawn_file_actions_addclose(&fa, fd[0]);
-        posix_spawn_file_actions_addclose(&fa, fd[1]);
-        if (posix_spawnp(&pid, argv[0], &fa, NULL, (char* const*)argv, environ) != 0) {
-            posix_spawn_file_actions_destroy(&fa);
+        (void)fcntl(fd[0], F_SETFD, FD_CLOEXEC);
+        (void)fcntl(fd[1], F_SETFD, FD_CLOEXEC);
+#endif
+        if (posix_spawn_file_actions_init(&fa) != 0) { close(fd[0]); close(fd[1]); return -1; }
+        if (posix_spawnattr_init(&at) != 0) { posix_spawn_file_actions_destroy(&fa); close(fd[0]); close(fd[1]); return -1; }
+        rc = posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+        if (!rc) rc = posix_spawn_file_actions_adddup2(&fa, fd[1], 1);
+        if (!rc) rc = posix_spawn_file_actions_adddup2(&fa, fd[1], 2);
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+        /* every other descriptor of the process, close-on-exec or not */
+        if (!rc) rc = posix_spawn_file_actions_addclosefrom_np(&fa, 3);
+#endif
+        sigfillset(&all);
+        sigdelset(&all, SIGKILL);
+        sigdelset(&all, SIGSTOP);
+        sigemptyset(&none);
+        if (!rc) rc = posix_spawnattr_setsigdefault(&at, &all);
+        if (!rc) rc = posix_spawnattr_setsigmask(&at, &none);
+#if defined(POSIX_SPAWN_SETSCHEDULER)
+        flags = (short)(flags | POSIX_SPAWN_SETSCHEDULER);
+        memset(&sp, 0, sizeof sp);
+        if (!rc) rc = posix_spawnattr_setschedpolicy(&at, SCHED_OTHER);
+        if (!rc) rc = posix_spawnattr_setschedparam(&at, &sp);
+#else
+        (void)sp;
+#endif
+#if defined(__APPLE__)
+        flags = (short)(flags | POSIX_SPAWN_CLOEXEC_DEFAULT);
+#endif
+        if (!rc) rc = posix_spawnattr_setflags(&at, flags);
+        if (!rc) rc = posix_spawnp(&pid, argv[0], &fa, &at, (char* const*)argv, environ);
+        posix_spawn_file_actions_destroy(&fa);
+        posix_spawnattr_destroy(&at);
+        if (rc != 0) {
             close(fd[0]); close(fd[1]);
             return -1;
         }
-        posix_spawn_file_actions_destroy(&fa);
         close(fd[1]);
         for (;;) {
             char t[4096];

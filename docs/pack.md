@@ -2918,6 +2918,51 @@ Not run here: Windows (MSVC, MinGW) and macOS; CI compiles them. The
 Windows code (wide paths, `MoveFileExW`, `FindFirstFileW`, `_wutime`)
 was written from the documentation of the calls.
 
+### The ffmpeg step's child (part K2)
+
+Found by part X (designer.md, "Part X as built"): `run_program()`, which
+starts ffmpeg, passed every inheritable handle of the process to it on
+Windows (`bInheritHandles` TRUE, no list), and on POSIX every descriptor
+without close-on-exec. In the designer a Build can start ffmpeg while
+the Run view starts the player, whose log handle is inheritable while
+`dsg_proc_start()` runs; ffmpeg would keep the log open after the
+player ends. Tool 0.12.0 (not released before, so no new version) gives
+the child only what it needs:
+
+| System | What the child gets |
+|---|---|
+| Windows | `STARTUPINFOEXW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` of two handles: the null device (standard input) and the pipe's write end (output and error); `NORMAL_PRIORITY_CLASS`, `CREATE_NO_WINDOW`. A null device that does not open is now a failed start, not a child with no input |
+| POSIX | Descriptors 0 to 2: `posix_spawn_file_actions_addclosefrom_np(&fa, 3)` on glibc 2.34 and later, `POSIX_SPAWN_CLOEXEC_DEFAULT` on macOS; the pipe is made close-on-exec (`pipe2(O_CLOEXEC)` on Linux), so another thread's child never gets it. Every signal at its default action, none blocked (a GUI program's ignored SIGPIPE would reach ffmpeg). `POSIX_SPAWN_SETSCHEDULER` with SCHED_OTHER |
+
+The policy: no build thread is meant to be elevated (designer.md, "The
+build thread"); before this change a build thread under SCHED_FIFO
+would have passed SCHED_FIFO to ffmpeg, whose encode threads then run
+at real-time priority (docs/rt.md, "Inherited policy"). Now the child
+is SCHED_OTHER whatever the thread's policy.
+
+Tests (`test_pack_tool`, Linux, 476 checks, 3 new): the test program
+stands in for ffmpeg (`ypt_options.ffmpeg` is its own path; with
+`YPT_FAKE_FFMPEG_LOG` set it writes its descriptors from
+`/proc/self/fd`, its policy and SIGPIPE's action, and prints a version
+line). With a descriptor of the test's own open without close-on-exec,
+the pack's temporary file open, and SIGPIPE ignored, both children
+(`-version`, then the encode) have descriptors 0, 1 and 2 only,
+SCHED_OTHER and SIGPIPE at its default; from a SCHED_FIFO thread (an
+`rtprio` grant; skipped without) the child is SCHED_OTHER. Hand mutants:
+no closefrom, no default signal actions, no SCHED_OTHER: 3 of 3 killed;
+the pipe without close-on-exec survives, as expected here (closefrom
+closes it too; it matters where there is no closefrom).
+
+Windows: not compiled with the SDK or run. clang 24 from the emsdk
+(`--target=x86_64-pc-windows-gnu -ffreestanding -fsyntax-only -Wall
+-Wextra -Wsometimes-uninitialized -Wshorten-64-to-32`) compiled the
+tool's `_WIN32` functions, taken verbatim from `pack_tool.c`
+(`run_program()`, the file helpers and `ypt_cache_trim()`), against
+hand-written stubs of the Win32 and C runtime declarations: no warning.
+That checks the syntax and the types only; CI compiles and runs the
+rest. Other POSIX systems without `addclosefrom_np` (glibc before 2.34,
+musl) pass only the descriptors without close-on-exec.
+
 ### Left
 
 - A hit still hashes the entry for the manifest (SHA-256, CRC-32); a
