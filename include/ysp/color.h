@@ -1,4 +1,4 @@
-/* ysp/color.h - v0.4.0 - public domain single-header color library for
+/* ysp/color.h - v0.4.1 - public domain single-header color library for
  *   calibrated displays
  *
  *   Color for psychophysics on a measured display: the display calibration
@@ -369,6 +369,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - ycol__nan() reads its volatile zero once per expression:
+ *          clang 22 (emscripten) rejects z / z under
+ *          -Wunsequenced-volatile. No change in any result.
  *   v0.4.0 - ycol_michelson() and ycol_shown (MICHELSON): a Michelson
  *          contrast in light as ysp/gfx.h's contrast along a direction,
  *          the largest one in gamut, the output codes of the peak and the
@@ -465,8 +468,8 @@ extern "C" {
 
 #define YCOL_VERSION_MAJOR  0
 #define YCOL_VERSION_MINOR  4
-#define YCOL_VERSION_PATCH  0
-#define YCOL_VERSION_STRING "0.4.0"
+#define YCOL_VERSION_PATCH  1
+#define YCOL_VERSION_STRING "0.4.1"
 
 /* YCOL_VERSION_STRING, as compiled into the implementation. */
 YCOL_API const char* ycol_version(void);
@@ -1780,8 +1783,11 @@ YCOL_API float ycol_max_contrast(const float bg[3], const float dir[3]) {
 #define YCOL__D2R (YCOL__PI / 180.0)
 
 static double ycol__nan(void) {
+    /* one volatile read per expression: clang 22's -Wunsequenced-volatile rejects z / z */
     volatile double z = 0.0;
-    return z / z;
+    double n = z;
+    n /= z;
+    return n;
 }
 
 static int ycol__finite(double v) { return v == v && v - v == 0.0; }

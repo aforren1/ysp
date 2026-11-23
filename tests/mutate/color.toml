@@ -16,8 +16,8 @@ name = "control: no change (must pass)"
 test = "color"
 expect = "survived"
 why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
-find = '#define YCOL_VERSION_PATCH  0'
-replace = '#define YCOL_VERSION_PATCH  0 '
+find = '#define YCOL_VERSION_PATCH  1'
+replace = '#define YCOL_VERSION_PATCH  1 '
 
 [[mutant]]
 id = "01"

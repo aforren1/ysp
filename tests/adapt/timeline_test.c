@@ -78,7 +78,11 @@ static void fail_s(int line, const char* what, const char* got, const char* want
 
 /* Built at run time: MSVC rejects 0.0/0.0 as a constant expression. */
 static volatile double g_zero = 0.0;
-static double make_nan(void) { return g_zero / g_zero; }
+static double make_nan(void) {
+    double n = g_zero; /* one volatile read per expression: clang 22's -Wunsequenced-volatile rejects z / z */
+    n /= g_zero;
+    return n;
+}
 static double make_inf(void) { return 1.0 / g_zero; }
 
 #define S_NS  YRT_S(1)

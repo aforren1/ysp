@@ -89,6 +89,24 @@ static int mkdir_private(const char* path) {
 #endif
 }
 
+/* Each folder from below BASE down to PATH. The rig folder is a few levels
+ * under the config home on macOS ("Library/Application Support/ysp/rig"),
+ * one fewer elsewhere. */
+static int mkdirs_under(const char* base_dir, const char* path) {
+    char buf[1300];
+    size_t i, n = strlen(path), b = strlen(base_dir);
+    if (n >= sizeof buf || n <= b || strncmp(path, base_dir, b) != 0) return -1;
+    memcpy(buf, path, n + 1);
+    for (i = b + 1; i <= n; i++) {
+        if (buf[i] != '/' && buf[i] != '\\' && buf[i] != '\0') continue;
+        const char c = buf[i];
+        buf[i] = '\0';
+        if (mkdir_private(buf)) return -1;
+        buf[i] = c;
+    }
+    return 0;
+}
+
 static void set_config_home(const char* dir) {
 #if defined(_WIN32)
     wchar_t w[1024];
@@ -1066,7 +1084,7 @@ static void remove_base(void) {
 
 int main(int argc, char** argv) {
     char err[512], real[1024] = "", odd[DSG_PATH_MAX], afc[DSG_PATH_MAX], vis[DSG_PATH_MAX], bim[DSG_PATH_MAX], rdk[DSG_PATH_MAX];
-    char absf[DSG_PATH_MAX], relf[DSG_PATH_MAX], pxf[DSG_PATH_MAX], def[4096], part[1300];
+    char absf[DSG_PATH_MAX], relf[DSG_PATH_MAX], pxf[DSG_PATH_MAX], def[4096], home0[512];
     static const char* const odd_files[] = { "experiment.json", "pack.json", "oddball.csv", "standard.png", "target.png", NULL };
     static const char* const afc_files[] = { "experiment.json", "pack.json", NULL };
     static const char* const vis_files[] = { "experiment.json", "pack.json", "targets.csv", NULL };
@@ -1080,8 +1098,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "%s\n", err);
         return 1;
     }
-    /* the user's own folder, never written: the test's must differ */
+    /* the user's own folder, never written: the test's must differ. HOME
+     * is read before set_config_home(), which sets it on macOS. */
     (void)yrig_dir(real, sizeof real);
+    snprintf(home0, sizeof home0, "%s", getenv("HOME") ? getenv("HOME") : "");
     if (dsg_join(base, sizeof base, work, "cfg") || mkdir_private(base)) {
         fprintf(stderr, "cannot make %s/cfg\n", work);
         return 1;
@@ -1091,10 +1111,10 @@ int main(int argc, char** argv) {
         /* WORK is under a folder that all users can write (/tmp), which
          * yrt_user_dir() rightly refuses: a folder of the test's own under
          * HOME, removed at the end (tests/adapt/rigfile_test.c does so) */
-        const char* home = getenv("HOME");
+        const char* home = home0;
         char cache[1024];
         (void)dsg_remove_tree(work, "cfg", err, sizeof err);
-        if (!home || home[0] != '/') {
+        if (home[0] != '/') {
             printf("SKIP: the work folder is refused as a config folder and there is no HOME\n");
             return 0;
         }
@@ -1114,8 +1134,7 @@ int main(int argc, char** argv) {
         remove_base();
         return 1;
     }
-    snprintf(part, sizeof part, "%s/ysp", base);
-    if (mkdir_private(part) || mkdir_private(rigdir) || pl_check_nominal_cal(&nominal) != 0 || rig_files() != 0) {
+    if (mkdirs_under(base, rigdir) || pl_check_nominal_cal(&nominal) != 0 || rig_files() != 0) {
         fprintf(stderr, "cannot make the rig folder %s\n", rigdir);
         remove_base();
         return 1;

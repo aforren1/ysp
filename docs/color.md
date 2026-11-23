@@ -1,6 +1,6 @@
 # ysp/color.h design notes
 
-Status: v0.4.0, 2026-10-21 (`ycol_michelson()`, section "Michelson
+Status: v0.4.1, 2026-11-23 (one volatile read per expression in `ycol__nan()`, for clang 22; no result changed). v0.4.0, 2026-10-21 (`ycol_michelson()`, section "Michelson
 contrast in light"); v0.1.0, 2026-10-06. ysp/gfx.h v0.5.0 takes its calibration,
 PAINT's spaces and VIDEO's primaries from this header (stages A to C
 below, each checked bit for bit). The Python and MATLAB/Octave bindings

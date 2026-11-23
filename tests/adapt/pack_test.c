@@ -1337,7 +1337,7 @@ static void test_runs_key(void) {
         b = st; b.font = NULL; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "no font");
         b = st; b.face = -1; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "face -1");
         b = st; b.size = 0; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "size 0");
-        b = st; b.size = zero / zero; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "size NaN");
+        b = st; b.size = zero; b.size /= zero; /* one volatile read per expression */ CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "size NaN");
         b = st; b.width = -1; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "width -1");
         b = st; b.line_height = 1.0 / zero; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "line height inf");
         b = st; b.align = 3; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "align 3");

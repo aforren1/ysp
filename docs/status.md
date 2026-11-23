@@ -494,6 +494,7 @@ Purpose: Color on a calibrated display: the display calibration (photometer read
 
 Status:
 
+- v0.4.1 (2026-11-23): `ycol__nan()` reads its volatile zero once per expression; clang 22 (the emscripten CI image) rejects `z / z` under `-Wunsequenced-volatile`. No result changed.
 - v0.4.0 (2026-10-21): `ycol_michelson()`: a Michelson contrast in light as ysp/gfx.h's contrast along a direction, the largest one in gamut, the peak's and trough's output codes and the contrast their light shows; past the gamut, reported, not clipped; luminance from the readings alone (gap G5 of experiment_format.md). Against the 2AFC example's own arithmetic, 0 of 2406 codes differ and the values agree within 1.1e-16; 10 of 10 new mutants killed. trial_2afc_adaptive, the Python binding (`Context.michelson()`) and the MEX binding (`ysp_color('michelson', ...)`, 2026-10-22) use it. [Design notes](color.md#michelson-contrast-in-light-v040).
 - v0.3.0 (2026-10-21): `ycol_param.values`, after `offset` (the shared row shape of gap G6): `cones` and `adapt` list their C enums' names and values. The test checks each row against its desc field and its enum, and each default against a zero desc; 2 of 2 new mutants killed. No conversion changed. [Design notes](color.md#enum-values-in-the-parameter-table-v030).
 - v0.2.0 (the [Conventions](conventions.md): `ycol_ctx_open()`/`_close()`, the message in `ycol_ctx_error()`; 2 mutants added).

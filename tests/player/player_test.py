@@ -1099,7 +1099,9 @@ def t_p18_version(ctx):
     with open(os.path.join(HERE, "..", "..", "player", "player.h")) as f:
         want = re.search(r'#define PL_VERSION_STRING "([^"]+)"', f.read()).group(1)
     r = subprocess.run([ctx.player, "--version"], capture_output=True, timeout=60)
-    check(r.returncode == 0 and r.stdout == ("ysp_player %s\n" % want).encode() and r.stderr == b"",
+    # Windows' C runtime writes text-mode stdout: CR LF there
+    out = r.stdout.replace(b"\r\n", b"\n")
+    check(r.returncode == 0 and out == ("ysp_player %s\n" % want).encode() and r.stderr == b"",
           "--version: exit %d, stdout %r, stderr %r; want 'ysp_player %s'" % (r.returncode, r.stdout[:200], r.stderr[:200], want))
 
 

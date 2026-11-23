@@ -29,7 +29,7 @@ C11 or C++17, and its top comment is its manual.
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 3 machines |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry, signal adapters | 0.6.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.2 | no device |
-| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
+| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.1 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.5.0 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11, macOS and web backends | 0.20.0 | 3 machines |

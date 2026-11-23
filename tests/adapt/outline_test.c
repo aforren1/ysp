@@ -1960,7 +1960,7 @@ static void t11_allocs(void) {
         z.err[0] = '\0';
         CHECK(yol_cset_add(&sz, 0, &q) == YOL_ERR_ARG);   /* no context: the code only */
         /* a specific message is kept, not replaced by the generic one */
-        yol_move(&q, 0, 0); yol_line(&q, zero / zero, 0);
+        { double nan = zero; nan /= zero; /* one volatile read per expression */ yol_move(&q, 0, 0); yol_line(&q, nan, 0); }
         CHECK(yol_path_end(&q) == YOL_ERR_ARG && strstr(yol_error(&z), "not finite") != NULL);
         yol_path_free(&q);
         yol_path_free(&e);
