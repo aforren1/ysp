@@ -45,6 +45,9 @@
 #include "imgui_te_engine.h"
 #include "imgui_te_exporters.h"
 
+#include <chrono>
+#include <thread>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -357,6 +360,20 @@ bool te_copy_project(const char* name, const char* copy, const char* const* file
 }
 
 void te_open(ImGuiTestContext* ctx, const char* folder) {
+    // A test's Scope kills its run but cannot yield for the end. The run
+    // ends when a frame reaps the child; the engine's next frames can come
+    // before the kernel has ended it (macOS CI), and an open then asks "A
+    // run goes".
+    if (ui_run_active()) {
+        ui_run_stop();
+        ui_run_kill();
+    }
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (ui_run_active() && std::chrono::steady_clock::now() < end) {
+        ctx->Yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    IM_CHECK(!ui_run_active());
     ctx->ItemInputValue("//##designer/##path", folder);
     if (modal_open()) ctx->ItemClick("//Unsaved changes/Discard");
     // the open's check runs on the check thread; its result lands a frame later
