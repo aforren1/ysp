@@ -51,7 +51,8 @@
  *  10. Threads (v0.3.5, Skribidi patch 0010): four threads make and
  *      destroy font and attribute collections, libraries and the versions
  *      at once; every collection gets an id of its own. Run under
- *      ThreadSanitizer, it also checks that they share no write.
+ *      ThreadSanitizer, it also checks that they share no write. Skipped
+ *      in a WebAssembly build without threads.
  * Exit 0 on pass, 1 on a failure. YSP_FONTS_DIR overrides the font folder
  * (YLAY_TEST_FONTS, C:/Windows/Fonts by default).
  */
@@ -1629,6 +1630,11 @@ typedef struct th_work {
     int bad_versions, bad_libs;
 } th_work;
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+/* Built without -pthread, every pthread_create fails: one thread only, so
+ * no race to check. */
+static void thread_checks(void) { printf("threads: skipped, built without threads\n"); }
+#else
 #if defined(_WIN32)
 static DWORD WINAPI th_main(LPVOID arg)
 #else
@@ -1717,6 +1723,7 @@ static void thread_checks(void) {
     CHECK(r == 0, "threads: %d attribute collections got another's id", r);
     printf("threads: %d threads, %d font and %d attribute collections each\n", TH_N, TH_ROUNDS, TH_ROUNDS);
 }
+#endif
 
 int main(void) {
     yol_ctx ol;

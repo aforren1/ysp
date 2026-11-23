@@ -579,7 +579,8 @@ Checks (Linux gcc 12):
   collection's id must differ from every other's. Without the patch (the
   two files reverted) 387 to 967 font collections and 470 to 1,092
   attribute collections got another's id in each of three runs; with it,
-  none.
+  none. A WebAssembly build without `-pthread` (the CI job) cannot start a
+  thread, so it skips this part and says so.
 - Under ThreadSanitizer (Debug, built and run under `setarch -R`):
   `test_layout` and `test_designer_build` (whose part 9 runs a Build and a
   check pack at once, four times) give no report. With
