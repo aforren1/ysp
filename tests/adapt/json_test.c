@@ -628,8 +628,12 @@ static void check_builder(void) {
     CHECK(yjs_new_double(&a, HUGE_VAL) == NULL);
     CHECK(yjs_new_double(&a, -HUGE_VAL) == NULL);
     {
+        /* one volatile read per expression: clang 22's
+         * -Wunsequenced-volatile rejects z / z */
         volatile double z = 0.0;
-        CHECK(yjs_new_double(&a, z / z) == NULL);
+        double nan = z;
+        nan /= z;
+        CHECK(yjs_new_double(&a, nan) == NULL);
     }
     CHECK(yjs_new_fixed(&a, 1, 19) == NULL);
     CHECK(yjs_new_fixed(&a, 1, -1) == NULL);

@@ -677,7 +677,13 @@ static void case_equal(void) {
 typedef pthread_t th_t;
 static int th_start(th_t* t, void* (*fn)(void*), void* arg) { return pthread_create(t, NULL, fn, arg); }
 static void th_join(th_t t) { pthread_join(t, NULL); }
-static int normal_policy(void) { return sched_getscheduler(0) == SCHED_OTHER; }
+/* pthread_getschedparam(), not sched_getscheduler(): macOS has no
+ * sched_getscheduler() */
+static int normal_policy(void) {
+    struct sched_param sp;
+    int policy = -1;
+    return pthread_getschedparam(pthread_self(), &policy, &sp) == 0 && policy == SCHED_OTHER;
+}
 #define TH_RET void*
 #define TH_OK NULL
 #else
@@ -805,7 +811,7 @@ static void case_two_sessions(void) {
     char a1[1200], b1[1200], a2[1200], b2[1200];
     checker c;
     th_t t;
-    int f1 = 0, f2 = 0;
+    int f1 = 0, f2 = 0, ok1, ok2;
     memset(&o1, 0, sizeof o1);
     memset(&o2, 0, sizeof o2);
     memset(&c, 0, sizeof c);
@@ -820,7 +826,10 @@ static void case_two_sessions(void) {
     if (th_start(&t, thread_check, &c) != 0) { CHECK(0, "two sessions: no thread"); return; }
     sim_desc(&d1, k1, &o1, b1);
     sim_desc(&d2, k2, &o2, b2);
-    CHECK(pl_sim_load(p1, &d1, &r1) == PL_CHECK_OK && pl_sim_load(p2, &d2, &r2) == PL_CHECK_OK, "two sessions: a load failed: %s %s", r1.message, r2.message);
+    /* both loads, so both results are set for the message (MSVC C4701) */
+    ok1 = pl_sim_load(p1, &d1, &r1) == PL_CHECK_OK;
+    ok2 = pl_sim_load(p2, &d2, &r2) == PL_CHECK_OK;
+    CHECK(ok1 && ok2, "two sessions: a load failed: %s %s", r1.message, r2.message);
     if (r1.status == PL_CHECK_OK && r2.status == PL_CHECK_OK) {
         (void)pl_sim_attach(p1, 0);
         (void)pl_sim_attach(p2, 0);
