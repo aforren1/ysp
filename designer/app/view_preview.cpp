@@ -15,6 +15,10 @@
 // it. The pane keeps its own dsg_rig for that band (dsg.h: one thread's
 // each), loaded once per choice and again when its file changes, which also
 // restarts the session (the session's load reads the file).
+//
+// Preview size (2026-11-23, docs/designer.md, "Preview size"): the wheel over
+// the display zooms about the cursor, a middle drag pans, and the details
+// below the display can fold away so the display takes their room.
 #include "views.h"
 #include "skt.h"
 #include "player.h"   // PL_NEED_FIELD
@@ -46,12 +50,26 @@ const char* const kSpeedNames[] = { "0.25x", "0.5x", "1x", "2x" };
 // The bounds of the view file's part (preview_part.c), so a value typed here
 // reads back the same.
 const int kMaxSide = 16384, kMaxHz = 1000;
+// The wheel's zoom steps, framebuffer px per participant px. From 1 up they
+// are whole numbers, so a participant px is a whole square of device px and
+// the nearest sampler shows the bytes exactly (decision 6); below 1 the
+// image is scaled down with ImGui's linear sampler and no mipmaps.
+const double kZooms[] = { DSG_PV_ZOOM_MIN, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1, 2, 3, 4, 6, 8, 12, DSG_PV_ZOOM_MAX };
+const int kNZooms = (int)(sizeof kZooms / sizeof kZooms[0]);
 
 struct Pane {
     // The cursor last given to the preview: a still mouse sends nothing, so
     // a paused display gets no input.
     bool pointer_in = false;
     float px = 0, py = 0;
+    // The image's top-left corner from the display area's, in framebuffer
+    // px (clamp_pan()). Not kept in the view file: it depends on the pane's
+    // size.
+    float pan_x = 0, pan_y = 0;
+    float wheel = 0;          // wheel notches not yet taken (a touchpad gives parts)
+    // Last frame's scale, drawn origin and area: the readout, and the 1:1
+    // preset's zoom about the area's middle.
+    float shown_s = 1, ox = 0, oy = 0, view_w = 0, view_h = 0;
     // Fields being edited: refreshed from the settings while not active.
     int display[2] = { 0, 0 };
     int hz = 0;
@@ -329,23 +347,58 @@ void controls(const dsg_preview_info& in, dsg_preview_settings& ps) {
     ImGui::SameLine();
     if (ImGui::RadioButton("Fit", ps.scale == DSG_PV_SCALE_FIT)) {
         ps.scale = DSG_PV_SCALE_FIT;
+        ps.zoom = 1;
+        P.pan_x = P.pan_y = 0;
         apply(ps);
     }
     ImGui::SetItemTooltip("Scale the display to the pane");
     ImGui::SameLine();
     if (ImGui::RadioButton("1:1", ps.scale == DSG_PV_SCALE_1TO1)) {
+        // about the middle of the display area: the point there stays
+        const float s = P.shown_s > 0 ? P.shown_s : 1.0f;
+        P.pan_x = P.view_w * 0.5f - (P.view_w * 0.5f - P.ox) / s;
+        P.pan_y = P.view_h * 0.5f - (P.view_h * 0.5f - P.oy) / s;
         ps.scale = DSG_PV_SCALE_1TO1;
+        ps.zoom = 1;
         apply(ps);
     }
     ImGui::SetItemTooltip("One participant pixel to one pixel of this monitor");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.0f %%", (double)P.shown_s * 100.0);
+    ImGui::SetItemTooltip("Device pixels per participant pixel. The wheel over the display zooms; a middle drag pans.");
+    ImGui::SameLine();
+    bool details = ps.details;
+    if (ImGui::Checkbox("Details", &details)) {
+        ps.details = details;
+        apply(ps);
+    }
+    ImGui::SetItemTooltip("Show the settings, the outputs and the data set below the display; off, the display takes their room");
 }
 
 // --- the display ------------------------------------------------------------------
 
 float snap(float v, float scale) { return floorf(v * scale + 0.5f) / scale; }
 
-void draw_display(const dsg_preview_info& in, const dsg_preview_settings& ps, float height) {
+// The next wheel step from s: up (dir > 0) or down.
+double next_zoom(double s, int dir) {
+    if (dir > 0) {
+        for (int i = 0; i < kNZooms; i++)
+            if (kZooms[i] > s * 1.0001) return kZooms[i];
+        return kZooms[kNZooms - 1];
+    }
+    for (int i = kNZooms - 1; i >= 0; i--)
+        if (kZooms[i] < s * 0.9999) return kZooms[i];
+    return kZooms[0];
+}
+
+// An axis of the pan: the image covers the area where it is larger, and
+// stays inside it where it is smaller, so a zoom out about the cursor holds
+// too. Fit puts it at the start, as it always did.
+float clamp_pan(float o, float img, float view) { return img <= view ? ImClamp(o, 0.0f, view - img) : ImClamp(o, view - img, 0.0f); }
+
+void draw_display(const dsg_preview_info& in, dsg_preview_settings& ps, float height) {
     ImGuiIO& io = ImGui::GetIO();
+    ImGuiContext& g = *ImGui::GetCurrentContext();
     const ImVec2 fb(io.DisplayFramebufferScale.x > 0 ? io.DisplayFramebufferScale.x : 1.0f,
                     io.DisplayFramebufferScale.y > 0 ? io.DisplayFramebufferScale.y : 1.0f);
     // the texture's size, else the shown session's, else the settings'
@@ -360,44 +413,95 @@ void draw_display(const dsg_preview_info& in, const dsg_preview_settings& ps, fl
     const bool have_tex = gl && dsg_preview_texture(pv(), &tex, &tw, &th) && tex != 0 && tw > 0 && th > 0;
     if (have_tex) W = tw, H = th;
 
-    const bool one = ps.scale == DSG_PV_SCALE_1TO1;
     const float avail_w = ImMax(ImGui::GetContentRegionAvail().x, 40.0f);
     // framebuffer px per participant px: Fit is at most 1, never a blow-up
-    float s = 1.0f;
-    if (!one) s = ImMin(1.0f, ImMin(avail_w * fb.x / (float)W, height * fb.y / (float)H));
-    const ImVec2 size((float)W * s / fb.x, (float)H * s / fb.y);
-
+    const float fit = ImMin(1.0f, ImMin(avail_w * fb.x / (float)W, height * fb.y / (float)H));
+    float s = ps.scale == DSG_PV_SCALE_1TO1 ? 1.0f : ps.scale == DSG_PV_SCALE_ZOOM ? (float)ps.zoom : fit;
+    // The area is the room's height, or the image's when that is less, so
+    // Fit's layout is the one it always was.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::BeginChild("##display", ImVec2(0, one ? height : ImMin(height, size.y)), ImGuiChildFlags_None,
-                      one ? ImGuiWindowFlags_HorizontalScrollbar : ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::BeginChild("##display", ImVec2(0, ImMin(height, (float)H * s / fb.y)), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
-    // at a whole framebuffer px, so at 1:1 a participant px is a device px
+    // at a whole framebuffer px, so at a whole zoom a participant px is a
+    // whole square of device px
     const ImVec2 c = ImGui::GetCursorScreenPos();
-    ImGui::SetCursorScreenPos(ImVec2(snap(c.x, fb.x), snap(c.y, fb.y)));
-    ImGui::InvisibleButton("##screen", size);
-    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    const ImVec2 v0(snap(c.x, fb.x), snap(c.y, fb.y));
+    const ImVec2 vsz = ImGui::GetContentRegionAvail();
+    const float vw = floorf(ImMax(vsz.x, 1.0f) * fb.x), vh = floorf(ImMax(vsz.y, 1.0f) * fb.y);
+    const ImGuiID sid = ImGui::GetID("##screen");
+
+    // The wheel zooms about the cursor: the participant point under it stays
+    // there (as the chart's wheel). The area owns the wheel, so the pane
+    // does not scroll under it.
+    const bool over = ImGui::IsWindowHovered();
+    if (over) ImGui::SetKeyOwner(ImGuiKey_MouseWheelY, sid);
+    P.wheel = over ? P.wheel + io.MouseWheel : 0.0f;
+    bool zoomed = false;
+    while (P.wheel >= 1.0f || P.wheel <= -1.0f) {
+        const int dir = P.wheel > 0 ? 1 : -1;
+        P.wheel -= (float)dir;
+        s = (float)next_zoom((double)s, dir);
+        zoomed = true;
+    }
+    if (zoomed) {
+        // the participant point under the cursor in the image drawn last
+        const float mx = (io.MousePos.x - v0.x) * fb.x, my = (io.MousePos.y - v0.y) * fb.y;
+        const float s0 = P.shown_s > 0 ? P.shown_s : 1.0f;
+        P.pan_x = mx - (mx - P.ox) / s0 * s;
+        P.pan_y = my - (my - P.oy) / s0 * s;
+        ps.scale = s == 1.0f ? DSG_PV_SCALE_1TO1 : DSG_PV_SCALE_ZOOM;
+        ps.zoom = s == 1.0f ? 1.0 : (double)s;
+        apply(ps);
+    }
+    // A middle drag pans (the left button is the session's: a click claims
+    // the keyboard, and the cursor is its pointer). This frame's motion moves
+    // this frame's image, so the image stays under the cursor.
+    if (g.ActiveId == sid && g.ActiveIdMouseButton == ImGuiMouseButton_Middle) {
+        P.pan_x += io.MouseDelta.x * fb.x;
+        P.pan_y += io.MouseDelta.y * fb.y;
+    }
+    if (ps.scale == DSG_PV_SCALE_FIT) P.pan_x = P.pan_y = 0;
+    const float iw = (float)W * s, ih = (float)H * s;
+    P.pan_x = clamp_pan(P.pan_x, iw, vw);
+    P.pan_y = clamp_pan(P.pan_y, ih, vh);
+    const float ox = floorf(P.pan_x + 0.5f), oy = floorf(P.pan_y + 0.5f);
+    P.ox = ox, P.oy = oy, P.view_w = vw, P.view_h = vh, P.shown_s = s;
+
+    // the image, and the part of it that shows: the item that takes the
+    // cursor and the clicks
+    const ImVec2 a(v0.x + ox / fb.x, v0.y + oy / fb.y);
+    const ImVec2 size(iw / fb.x, ih / fb.y);
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    const ImVec2 q0(ImMax(a.x, v0.x), ImMax(a.y, v0.y));
+    const ImVec2 q1(ImMin(b.x, v0.x + vw / fb.x), ImMin(b.y, v0.y + vh / fb.y));
+    ImGui::SetCursorScreenPos(q0);
+    ImGui::InvisibleButton("##screen", ImVec2(ImMax(q1.x - q0.x, 1.0f), ImMax(q1.y - q0.y, 1.0f)),
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // Decision 6: nearest at a whole zoom of 1 or more, so the bytes are
+    // exact; ImGui's linear sampler below 1. The texture has no mipmaps.
+    const bool exact = s >= 1.0f && s == floorf(s);
     if (have_tex) {
         const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
-        // Decision 6: nearest at 1:1, so the bytes are exact; ImGui's linear
-        // sampler at Fit. The texture has no mipmaps.
-        if (one && pio.DrawCallback_SetSamplerNearest) dl->AddCallback(pio.DrawCallback_SetSamplerNearest, nullptr);
+        if (exact && pio.DrawCallback_SetSamplerNearest) dl->AddCallback(pio.DrawCallback_SetSamplerNearest, nullptr);
         // Rows bottom up (GL's order). A white tint and no style alpha, or
         // ImGui's blend mixes the device codes with the background.
         dl->AddImage(ImTextureRef((ImTextureID)tex), a, b, ImVec2(0, 1), ImVec2(1, 0), IM_COL32_WHITE);
-        if (one && pio.DrawCallback_SetSamplerLinear) dl->AddCallback(pio.DrawCallback_SetSamplerLinear, nullptr);
+        if (exact && pio.DrawCallback_SetSamplerLinear) dl->AddCallback(pio.DrawCallback_SetSamplerLinear, nullptr);
     } else {
         dl->AddRectFilled(a, b, gl ? kNoFrame : kNoImage);
         const char* t = gl ? "No frame yet." : "No image: the session draws with no GL.";
         const ImVec2 ts = ImGui::CalcTextSize(t);
         ImGui::LogText("%s", t);
-        dl->AddText(ImVec2(a.x + ImMax(0.0f, (size.x - ts.x) * 0.5f), a.y + ImMax(0.0f, (size.y - ts.y) * 0.5f)), kText, t);
+        dl->AddText(ImVec2(q0.x + ImMax(0.0f, (q1.x - q0.x - ts.x) * 0.5f), q0.y + ImMax(0.0f, (q1.y - q0.y - ts.y) * 0.5f)), kText, t);
     }
-    if (in.keyboard) dl->AddRect(a, b, kKeys, 0.0f, 2.0f);
+    if (in.keyboard) dl->AddRect(q0, q1, kKeys, 0.0f, 2.0f);
 
-    // A click gives the session the keyboard; Escape gives it back.
-    if (ImGui::IsItemActivated()) dsg_preview_set_keyboard(pv(), true);
-    // The cursor in participant px from the top-left corner.
+    // A left click gives the session the keyboard; Escape gives it back.
+    if (ImGui::IsItemActivated() && g.ActiveIdMouseButton == ImGuiMouseButton_Left) dsg_preview_set_keyboard(pv(), true);
+    // The cursor in participant px from the image's top-left corner, at any
+    // zoom and pan: the corner is the one drawn.
     if (ImGui::IsItemHovered()) {
         const float x = (io.MousePos.x - a.x) * (float)W / size.x;
         const float y = (io.MousePos.y - a.y) * (float)H / size.y;
@@ -412,7 +516,7 @@ void draw_display(const dsg_preview_info& in, const dsg_preview_settings& ps, fl
         dsg_preview_pointer(pv(), P.px, P.py, false);
     }
     ImGui::EndChild();
-    if (!one && s < 1.0f) ImGui::TextDisabled("Scaled: fine patterns alias; use 1:1");
+    if (!exact) ImGui::TextDisabled("Scaled: fine patterns alias; use 1:1");
 }
 
 // --- the choice strip -------------------------------------------------------------
@@ -699,17 +803,22 @@ void draw() {
     if (in.keyboard) ImGui::TextColored(kKeysText, "Keys go to the session. Press Esc to give them back.");
     else ImGui::TextDisabled("Click the display to send it keys.");
 
-    // The details below get 7 rows; the display at least a third of the room.
+    // The details below get 7 rows; folded, two stay for the rows under the
+    // display that come and go (the alias note, the choices). The display
+    // gets at least a third of the room.
     const float fixed = ImGui::GetCursorPosY() - top - varying;
-    draw_display(in, ps, ImMax(room - fixed - ImGui::GetFrameHeightWithSpacing() * 7.0f, room * 0.33f));
+    const float below = ImGui::GetFrameHeightWithSpacing() * (ps.details ? 7.0f : 2.0f);
+    draw_display(in, ps, ImMax(room - fixed - below, room * 0.33f));
     choice_strip();
 
-    ImGui::BeginChild("##details", ImVec2(0, 0));
-    if (ImGui::CollapsingHeader("Settings")) settings_section(ps);
-    if (dsg_preview_undriven(pv()) > 0 && ImGui::CollapsingHeader("Roles not driven", ImGuiTreeNodeFlags_DefaultOpen)) undriven_section();
-    if (ImGui::CollapsingHeader("Outputs", ImGuiTreeNodeFlags_DefaultOpen)) outputs_section();
-    if (ImGui::CollapsingHeader("Data set", ImGuiTreeNodeFlags_DefaultOpen)) data_section(in);
-    ImGui::EndChild();
+    if (ps.details) {
+        ImGui::BeginChild("##details", ImVec2(0, 0));
+        if (ImGui::CollapsingHeader("Settings")) settings_section(ps);
+        if (dsg_preview_undriven(pv()) > 0 && ImGui::CollapsingHeader("Roles not driven", ImGuiTreeNodeFlags_DefaultOpen)) undriven_section();
+        if (ImGui::CollapsingHeader("Outputs", ImGuiTreeNodeFlags_DefaultOpen)) outputs_section();
+        if (ImGui::CollapsingHeader("Data set", ImGuiTreeNodeFlags_DefaultOpen)) data_section(in);
+        ImGui::EndChild();
+    }
 
     // The pane losing the focus gives the keyboard back, as Escape does.
     if (dsg_preview_keyboard(pv()) && !ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) dsg_preview_set_keyboard(pv(), false);
@@ -725,6 +834,12 @@ void closed() {
 void shutdown() { closed(); }
 
 } // namespace
+
+bool ui_preview_pane_pointer(float* x, float* y) {
+    *x = P.px;
+    *y = P.py;
+    return P.pointer_in;
+}
 
 extern const UiView ui_view_preview = {
     "preview", "Preview", UI_SLOT_AUX,

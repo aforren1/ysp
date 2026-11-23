@@ -226,6 +226,26 @@ static bool child_drawn(const char* label) {
     return false;
 }
 
+// The main window's child for a view's label, if it drew in the last frame.
+static ImGuiWindow* child_window(const char* label) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    ImGuiWindow* top = ImGui::FindWindowByName("##designer");
+    if (!top) return nullptr;
+    const ImGuiID id = ImHashStr(label, 0, top->ID);
+    for (ImGuiWindow* w : g.Windows)
+        if (w->ParentWindow == top && w->ChildId == id && w->Active) return w;
+    return nullptr;
+}
+
+// The AUX pane's share of the room that the side column leaves: the main
+// view, the splitter, the pane and the spacing before the side column.
+static float aux_share() {
+    ImGuiWindow* m = child_window("Definition");
+    ImGuiWindow* a = child_window("Preview");
+    if (!m || !a) return -1;
+    return a->Size.x / (m->Size.x + a->Size.x + 2 * ImGui::GetStyle().ItemSpacing.x);
+}
+
 // The preview pane's child window, or a child of it whose name has `name`.
 static ImGuiWindow* pane_window(const char* name) {
     ImGuiContext& g = *ImGui::GetCurrentContext();
@@ -282,7 +302,7 @@ static bool same_settings(const dsg_preview_settings& a, const dsg_preview_setti
     const dsg_session_settings& y = b.session;
     if (x.width != y.width || x.height != y.height || x.hz != y.hz || x.seed != y.seed || strcmp(x.participant, y.participant) != 0 ||
         x.rt_s != y.rt_s || strcmp(x.pin_leaf, y.pin_leaf) != 0 || x.pin_row != y.pin_row || x.n_fields != y.n_fields ||
-        a.speed != b.speed || a.scale != b.scale)
+        a.speed != b.speed || a.scale != b.scale || a.zoom != b.zoom || a.details != b.details)
         return false;
     for (int i = 0; i < x.n_fields; i++) {
         // the file keeps fields sorted by name, so look each one up
@@ -588,6 +608,7 @@ int main(int argc, char** argv) {
     snprintf(ps.session.fields[1].value, sizeof ps.session.fields[1].value, "42");
     ps.speed = 0.5;
     ps.scale = DSG_PV_SCALE_1TO1;
+    ps.details = false;   // 2026-11-23: the details folded
     dsg_preview_set(ui_preview(), &ps);
     ui_show_aux(true);
     settle();
@@ -598,8 +619,27 @@ int main(int argc, char** argv) {
     CHECK(open && same_settings(ps, got), "the view file's part holds the pane and the settings");
     size_t pn = 0;
     const char* part = dsg_view_part_get(&v, "preview", &pn);
-    CHECK(part && strstr(part, "\"seed\":9223372036854775813") && strstr(part, "\"scale\":\"1:1\""), "the part's JSON: %.*s", (int)pn,
-          part ? part : "");
+    CHECK(part && strstr(part, "\"seed\":9223372036854775813") && strstr(part, "\"scale\":\"1:1\"") && strstr(part, "\"details\":false"),
+          "the part's JSON: %.*s", (int)pn, part ? part : "");
+    // the AUX pane's width (2026-11-23): its own part, the default share
+    part = dsg_view_part_get(&v, "aux", &pn);
+    CHECK(part && pn == 14 && memcmp(part, "{\"width\":0.45}", 14) == 0, "the part aux: %.*s", (int)pn, part ? part : "");
+    // a zoom round-trips; it is written as "zoom" with its value
+    {
+        dsg_view zv;
+        memset(&zv, 0, sizeof zv);
+        dsg_preview_settings z = ps, zg = {};
+        z.scale = DSG_PV_SCALE_ZOOM;
+        z.zoom = 3;
+        bool zo = false;
+        CHECK(dsg_preview_part_write(&zv, &z, true) == 0, "a zoom written");
+        size_t zn = 0;
+        const char* zj = dsg_view_part_get(&zv, "preview", &zn);
+        CHECK(zj && strstr(zj, "\"scale\":\"zoom\"") && strstr(zj, "\"zoom\":3"), "the zoom's JSON: %.*s", (int)zn, zj ? zj : "");
+        dsg_preview_part_read(&zv, &zg, &zo);
+        CHECK(zo && same_settings(z, zg), "the part holds the zoom");
+        dsg_view_free(&zv);
+    }
     dsg_view_free(&v);
 
     // another project: no part, so the defaults
@@ -617,6 +657,24 @@ int main(int argc, char** argv) {
     settle();
     dsg_preview_get(ui_preview(), &got);
     CHECK(ui_aux_open() && same_settings(ps, got) && child_drawn("Preview"), "reopened: the pane shows, with the settings");
+    CHECK(fabsf(aux_share() - 0.45f) < 0.005f, "the AUX pane's share is the default: %.3f", aux_share());
+    // the part "aux" by hand: a share in its bounds sets the width; one out
+    // of them reads as the default
+    for (int k = 0; k < 2; k++) {
+        static const char* const parts[] = { "{\"width\":0.6}", "{\"width\":0.95}" };
+        static const float want[] = { 0.6f, 0.45f };
+        ui_open(dir2);   // the close writes dir's view file; then change it
+        settle();
+        dsg_view hv;
+        memset(&hv, 0, sizeof hv);
+        CHECK(dsg_view_read(dir, &hv, err, sizeof err) == 0 && dsg_view_part_set(&hv, "aux", parts[k], strlen(parts[k])) == 0 &&
+                  dsg_view_write(dir, &hv, err, sizeof err) == 0,
+              "the part aux by hand: %s", err);
+        dsg_view_free(&hv);
+        ui_open(dir);
+        settle();
+        CHECK(fabsf(aux_share() - want[k]) < 0.005f, "the part %s: the share %.3f (want %.2f)", parts[k], aux_share(), want[k]);
+    }
 
     // a part written by hand with values out of range: each takes its default
     {
@@ -627,6 +685,17 @@ int main(int argc, char** argv) {
         CHECK(dsg_view_part_set(&hv, "preview", bad, sizeof bad - 1) == 0, "a part by hand");
         dsg_preview_part_read(&hv, &got, &open);
         CHECK(!open && same_settings(def, got), "out of range: the defaults");
+        // a zoom out of its bounds is Fit; details that are not a boolean show
+        static const char badz[] = "{\"scale\":\"zoom\",\"zoom\":40,\"details\":0}";
+        dsg_view_part_set(&hv, "preview", nullptr, 0);
+        CHECK(dsg_view_part_set(&hv, "preview", badz, sizeof badz - 1) == 0, "a zoom by hand");
+        dsg_preview_part_read(&hv, &got, &open);
+        CHECK(same_settings(def, got), "a zoom out of range: Fit, the details shown");
+        static const char badz2[] = "{\"scale\":\"zoom\",\"zoom\":0.1}";
+        dsg_view_part_set(&hv, "preview", nullptr, 0);
+        dsg_view_part_set(&hv, "preview", badz2, sizeof badz2 - 1);
+        dsg_preview_part_read(&hv, &got, &open);
+        CHECK(same_settings(def, got), "a zoom under DSG_PV_ZOOM_MIN: Fit");
         static const char junk[] = "{\"display\":[1024,768]";
         dsg_view_part_set(&hv, "preview", nullptr, 0);
         CHECK(dsg_view_part_set(&hv, "preview", junk, sizeof junk - 1) == -1, "the view file keeps no part that does not parse");
@@ -850,6 +919,113 @@ int main(int argc, char** argv) {
             pvd_pointer(&x, &y, &inside);
             CHECK(inside && fabsf(x - 400.0f) <= 800.0f / w && fabsf(y - 300.0f) <= 600.0f / h, "Fit: the middle is (400, 300) px: (%.2f, %.2f)",
                   x, y);
+        }
+        // Zoom and pan (2026-11-23), from 1:1 again.
+        dsg_preview_set(ui_preview(), &got1);
+        frames(2);
+        disp = pane_window("##display");
+        const int z0 = disp ? find_image(disp->DrawList, (ImTextureID)77, &mn, &mx, &uv) : -1;
+        CHECK(z0 >= 0 && mx.x - mn.x == 800.0f, "1:1 again: 800 px wide");
+        if (z0 >= 0 && disp) {
+            const ImVec2 area = disp->Pos;
+            // the wheel over the display: zoom 2 about the cursor
+            ImGui::GetIO().AddMousePosEvent(mn.x + 100, mn.y + 50);
+            frame();
+            const int calls = pvd_pointer_calls();
+            ImGui::GetIO().AddMouseWheelEvent(0, 1);
+            frame();
+            frame_log();
+            dsg_preview_settings zs = {};
+            dsg_preview_get(ui_preview(), &zs);
+            CHECK(zs.scale == DSG_PV_SCALE_ZOOM && zs.zoom == 2.0, "a wheel notch up from 1:1: zoom 2 (scale %d, zoom %.3f)", zs.scale, zs.zoom);
+            disp = pane_window("##display");
+            ImVec2 zn, zx, zuv;
+            const int z1 = disp ? find_image(disp->DrawList, (ImTextureID)77, &zn, &zx, &zuv) : -1;
+            CHECK(z1 >= 0 && zx.x - zn.x == 1600.0f && zx.y - zn.y == 1200.0f, "zoom 2: 1600 x 1200 px (%.1f x %.1f)", zx.x - zn.x, zx.y - zn.y);
+            CHECK(zn.x == floorf(zn.x) && zn.y == floorf(zn.y), "zoom 2 at a whole px (%.2f, %.2f)", zn.x, zn.y);
+            CHECK(zn.x == mn.x + 100 - 200 && zn.y == mn.y + 50 - 100, "about the cursor: the corner moved to (%.1f, %.1f) from (%.1f, %.1f)",
+                  zn.x, zn.y, mn.x, mn.y);
+            if (z1 >= 0) {
+                ImVector<ImDrawCmd>& cb = disp->DrawList->CmdBuffer;
+                CHECK(z1 > 0 && cb[z1 - 1].UserCallback == cb_nearest && z1 + 1 < cb.Size && cb[z1 + 1].UserCallback == cb_linear,
+                      "zoom 2, a whole zoom: the nearest sampler around the image");
+            }
+            CHECK(strstr(g_log, "fine patterns alias") == nullptr, "zoom 2 does not say scaled");
+            CHECK(strstr(g_log, "200 %") != nullptr, "the readout says 200 %%");
+            float x = 0, y = 0;
+            bool inside = false;
+            pvd_pointer(&x, &y, &inside);
+            CHECK(inside && x == 100.0f && y == 50.0f && pvd_pointer_calls() == calls, "the px under the cursor stays (100, 50): (%.2f, %.2f), %d calls",
+                  x, y, pvd_pointer_calls() - calls);
+            // a middle drag pans, and claims no keyboard
+            dsg_preview_set_keyboard(ui_preview(), false);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+            frame();
+            io.AddMousePosEvent(mn.x + 100 - 60, mn.y + 50 - 40);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+            frame();
+            frame();
+            disp = pane_window("##display");
+            ImVec2 pn, px2, puv;
+            const int z2 = disp ? find_image(disp->DrawList, (ImTextureID)77, &pn, &px2, &puv) : -1;
+            CHECK(z2 >= 0 && pn.x == zn.x - 60 && pn.y == zn.y - 40, "a middle drag of (-60, -40) moves the image so: (%.1f, %.1f)", pn.x - zn.x,
+                  pn.y - zn.y);
+            CHECK(!dsg_preview_keyboard(ui_preview()), "a middle press claims no keyboard");
+            pvd_pointer(&x, &y, &inside);
+            CHECK(inside && x == 100.0f && y == 50.0f, "the image moved with the cursor: still (100, 50): (%.2f, %.2f)", x, y);
+            // the pointer mapping at zoom 2 and the pan: half a px is half a px
+            io.AddMousePosEvent(pn.x + 301, pn.y + 123);
+            frame();
+            pvd_pointer(&x, &y, &inside);
+            CHECK(inside && x == 150.5f && y == 61.5f, "zoom 2, panned: (301, 123) px of the image is (150.5, 61.5): (%.2f, %.2f)", x, y);
+            // a left click still claims the keyboard
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+            CHECK(dsg_preview_keyboard(ui_preview()), "a left click claims the keyboard");
+            dsg_preview_set_keyboard(ui_preview(), false);
+            // the pan stops at the image's edge: the area shows no gap
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+            frame();
+            io.AddMousePosEvent(pn.x + 2000, pn.y + 1500);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+            frame();
+            frame();
+            disp = pane_window("##display");
+            const int z3 = disp ? find_image(disp->DrawList, (ImTextureID)77, &pn, &px2, &puv) : -1;
+            CHECK(z3 >= 0 && pn.x == area.x && pn.y == area.y, "dragged far: the corner at the area's (%.1f, %.1f): (%.1f, %.1f)", area.x, area.y,
+                  pn.x, pn.y);
+            // two notches down: 1, then 2/3, the linear sampler and the note
+            io.AddMousePosEvent(pn.x + 40, pn.y + 40);
+            frame();
+            io.AddMouseWheelEvent(0, -1);
+            frame();
+            dsg_preview_get(ui_preview(), &zs);
+            CHECK(zs.scale == DSG_PV_SCALE_1TO1 && zs.zoom == 1.0, "a notch down from 2: 1:1 (scale %d)", zs.scale);
+            io.AddMouseWheelEvent(0, -1);
+            frame();
+            frame_log();
+            dsg_preview_get(ui_preview(), &zs);
+            CHECK(zs.scale == DSG_PV_SCALE_ZOOM && fabs(zs.zoom - 2.0 / 3.0) < 1e-6, "another: 2/3 (zoom %.4f)", zs.zoom);
+            disp = pane_window("##display");
+            bool cbs = false;
+            for (int k = 0; disp && k < disp->DrawList->CmdBuffer.Size; k++)
+                cbs = cbs || disp->DrawList->CmdBuffer[k].UserCallback == cb_nearest || disp->DrawList->CmdBuffer[k].UserCallback == cb_linear;
+            CHECK(!cbs && strstr(g_log, "Scaled: fine patterns alias") != nullptr, "2/3: no sampler change, and it says scaled");
+            // folded details: no details child; the display takes the room
+            dsg_preview_settings fd = zs;
+            fd.details = false;
+            dsg_preview_set(ui_preview(), &fd);
+            frames(2);
+            CHECK(pane_window("##details") == nullptr || !pane_window("##details")->Active, "folded: no details");
+            fd.details = true;
+            dsg_preview_set(ui_preview(), &fd);
+            frames(2);
+            CHECK(pane_window("##details") != nullptr && pane_window("##details")->Active, "unfolded: the details again");
         }
         pio.DrawCallback_SetSamplerNearest = nullptr;
         pio.DrawCallback_SetSamplerLinear = nullptr;

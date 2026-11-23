@@ -15,6 +15,7 @@
 #include "imgui_internal.h"
 
 #include "skribidi/skb_layout.h"
+#include "ysp/json.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -39,6 +40,13 @@ const int kTextView = -1;
 // S->selected for the preview's issue, which is not in the check's report.
 const int kPreviewIssue = -2;
 
+// The AUX pane's width: a share of the room that the side column leaves, so
+// it follows the window's size. The splitter sets it, and the view file's
+// part "aux" keeps it; a share out of the bounds reads as the default.
+const float kAuxShare = 0.45f, kAuxShareMin = 0.15f, kAuxShareMax = 0.85f;
+// In points: the pane's least width, and what the main view keeps.
+const float kAuxMinW = 320.0f, kMainMinW = 240.0f;
+
 struct State {
     UiPlatform plat = {};
     dsg_project proj = {};
@@ -47,6 +55,7 @@ struct State {
     dsg_preview_gl gl = {};          // read by the check thread: fixed at ui_init()
     dsg_preview* pv = nullptr;       // the preview (preview.h)
     bool aux_on[kMaxViews] = {};     // each AUX view's check box
+    float aux_share = kAuxShare;     // the view file's part "aux"
     bool window_shown = true;
     int64_t now = 0;                 // the UI's clock this frame
     dsg_preview_where where = {};    // ui_preview_where()'s
@@ -211,6 +220,25 @@ const char* main_id() {
     return S->main_view >= 0 && S->main_view < nv ? v[S->main_view]->id : "text";
 }
 
+// The part "aux": {"width": share}. Missing, not a number or out of the
+// bounds: the default.
+void read_aux_part(const dsg_view* v) {
+    S->aux_share = kAuxShare;
+    size_t n = 0;
+    const char* json = dsg_view_part_get(v, "aux", &n);
+    if (!json) return;
+    yjs_arena a;
+    yjs_arena_init_heap(&a, (size_t)1 << 16);
+    yjs_value* root = nullptr;
+    yjs_error e;
+    memset(&e, 0, sizeof e);
+    double w = 0;
+    if (yjs_parse(&a, json, n, nullptr, &root, &e) == YJS_OK && root && root->type == YJS_OBJECT &&
+        yjs_double(yjs_get(root, "width"), &w) == YJS_OK && w >= (double)kAuxShareMin && w <= (double)kAuxShareMax)
+        S->aux_share = (float)w;
+    yjs_arena_free(&a);
+}
+
 void write_view() {
     if (!S->open) return;
     int nv;
@@ -222,6 +250,10 @@ void write_view() {
     if (dsg_preview_part_write(&S->proj.view, &ps, aux_view_on("preview")))
         set_status("The preview's view state was not kept: the view file is full.");
     if (dsg_run_part_write(&S->proj.view, &S->run_set, aux_view_on("run"))) set_status("The Run view's settings were not kept: the view file is full.");
+    char aux_part[64];
+    const int an = snprintf(aux_part, sizeof aux_part, "{\"width\":%.4f}", (double)S->aux_share);
+    if (an <= 0 || dsg_view_part_set(&S->proj.view, "aux", aux_part, (size_t)an))
+        set_status("The AUX pane's width was not kept: the view file is full.");
     // a shallow copy: the parts stay the project's, the ImGui text is ImGui's
     dsg_view w = S->proj.view;
     caret_line_col(&w.caret_line, &w.caret_column);
@@ -325,6 +357,7 @@ void open_now(const char* path) {
     aux = false;
     dsg_run_part_read(&S->proj.view, &S->run_set, &aux);
     set_aux_view("run", aux);
+    read_aux_part(&S->proj.view);
     look_rig_default(true);
     if (S->proj.view.selection[0]) {
         dsg_sel s;
@@ -1222,8 +1255,10 @@ void ui_frame() {
     const float avail_w = ImGui::GetContentRegionAvail().x;
     const float issues_h = ImMax(120.0f, ImGui::GetContentRegionAvail().y * 0.3f);
     const float side_w = side ? ImMax(280.0f, avail_w * 0.3f) : 0.0f;
-    // the preview at Fit wants room; the main view keeps at least a third
-    const float aux_w = aux ? ImMax(320.0f, (avail_w - side_w) * 0.45f) : 0.0f;
+    // The AUX pane: its share of what the side column leaves, at least
+    // kAuxMinW, and the main view keeps kMainMinW when there is room.
+    const float aux_room = avail_w - side_w;
+    const float aux_w = aux ? ImMax(kAuxMinW, ImMin(S->aux_share * aux_room, aux_room - kMainMinW)) : 0.0f;
     const float main_w = -((side ? side_w + sp : 0.0f) + (aux ? aux_w + sp : 0.0f));
 
     // The text view keeps the skeleton's child name, so its tests' paths hold.
@@ -1237,8 +1272,24 @@ void ui_frame() {
     }
     ImGui::EndChild();
     if (aux) {
+        // The splitter fills the spacing between the main view and the pane
+        // (2026-11-23): a drag sets the pane's share of the room.
+        ImGui::SameLine(0, 0);
+        const ImVec2 sp0 = ImGui::GetCursorScreenPos();
+        const float split_h = ImMax(ImGui::GetContentRegionAvail().y - issues_h, 1.0f);
+        ImGui::InvisibleButton("##aux_split", ImVec2(sp, split_h));
+        if (ImGui::IsItemActive() && ImGui::GetIO().MouseDelta.x != 0 && aux_room > 0) {
+            const float w = ImMax(kAuxMinW, ImMin(aux_w - ImGui::GetIO().MouseDelta.x, aux_room - kMainMinW));
+            S->aux_share = ImClamp(w / aux_room, kAuxShareMin, kAuxShareMax);
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(sp0.x + sp * 0.5f - 1.0f, sp0.y), ImVec2(sp0.x + sp * 0.5f + 1.0f, sp0.y + split_h),
+                                                      ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_SeparatorActive : ImGuiCol_SeparatorHovered));
+        }
+        ImGui::SetItemTooltip("Drag to change the pane's width");
         // AUX views are children of the main window too: "//##designer/LABEL".
-        ImGui::SameLine();
+        ImGui::SameLine(0, 0);
         ImGui::BeginGroup();
         const float h = (ImGui::GetContentRegionAvail().y - issues_h - ImGui::GetStyle().ItemSpacing.y * (float)(n_aux - 1)) / (float)n_aux;
         for (int i = 0; i < nv; i++) {

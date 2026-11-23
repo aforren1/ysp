@@ -92,6 +92,10 @@ int64_t ui_now_ns();
 // session shows. Each call reads it again; the strings stay valid until a
 // call that changes the preview (preview.h, "Pointers").
 const dsg_preview_where* ui_preview_where();
+// The cursor that the preview's pane last gave dsg_preview_pointer(), in
+// participant px; false while the cursor is not over the display. For the
+// tests: the pane's zoom and pan change the mapping (2026-11-23).
+bool ui_preview_pane_pointer(float* x, float* y);
 // The Preview view in the AUX pane, as its toolbar check box shows and hides
 // it (step 5's names: the Preview was the pane's only view).
 bool ui_aux_open();

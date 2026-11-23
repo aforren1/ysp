@@ -11,6 +11,9 @@
 //   1. The session loads on the check thread and attaches on the context.
 //   2. One ImGui frame later, glReadPixels() of framebuffer 0 at the
 //      image's rectangle gives the texture's bytes: alpha 255, no tint.
+//   2b. Zoom 2 (2026-11-23, "Preview size"), panned by a middle drag of
+//      an odd number of px: framebuffer 0 shows each texel as a 2 x 2
+//      square of px, exactly, where the display's child shows it.
 //   3. The word is at its place, in its row's ink: stroop's text box is
 //      1000 px wide at the display's center, and its lines start at the
 //      box's left edge (align "start"), so the word's left edge is at
@@ -474,6 +477,76 @@ static int run_test(const char* work) {
         CHECK(alpha_t == 0 && alpha_f == 0, "alpha 255: %zu texture px and %zu framebuffer px are not", alpha_t, alpha_f);
         CHECK(diff == 0, "framebuffer 0 is the texture's bytes: %zu bytes differ, the first at px (%zu, %zu): %u against %u", diff,
               first / 4 % DW, first / 4 / DW, first < nb ? fbb[first] : 0, first < nb ? t1[first] : 0);
+    }
+
+    // 2b. zoom 2, panned: each texel a 2 x 2 square, exactly
+    {
+        dsg_preview_settings z = {};
+        dsg_preview_get(ui_preview(), &z);
+        z.scale = DSG_PV_SCALE_ZOOM;
+        z.zoom = 2;
+        dsg_preview_set(ui_preview(), &z);
+        frame(true, true);
+        ImGuiWindow* d = pane_window("##display");
+        ImGuiIO& io = ImGui::GetIO();
+        if (d) {
+            // a middle drag of (-37, -21): the pan is not a whole number of texels
+            const ImVec2 at(d->Pos.x + 100, d->Pos.y + 60);
+            io.AddMousePosEvent(at.x, at.y);
+            frame(true, true);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+            frame(true, true);
+            io.AddMousePosEvent(at.x - 37, at.y - 21);
+            frame(true, true);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+            frame(true, true);
+            io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            frame(true, true);
+        }
+        d = pane_window("##display");
+        ImVec2 za(0, 0), zb(0, 0);
+        const bool zr = d && image_rect(d->DrawList, (ImTextureID)tex, &za, &zb);
+        CHECK(zr, "zoom 2: the pane drew the texture");
+        if (zr) {
+            CHECK(zb.x - za.x == 2.0f * DW && zb.y - za.y == 2.0f * DH && za.x == floorf(za.x) && za.y == floorf(za.y),
+                  "zoom 2 at a whole px: (%.2f, %.2f) to (%.2f, %.2f)", za.x, za.y, zb.x, zb.y);
+            CHECK(za.x == d->Pos.x - 37.0f && za.y <= d->Pos.y, "panned by the drag: the corner at (%.1f, %.1f) of the area's (%.1f, %.1f)",
+                  za.x, za.y, d->Pos.x, d->Pos.y);
+            // the part that shows: the image inside the child's clip
+            const ImRect& c = d->InnerClipRect;
+            const int x0 = (int)ImMax(za.x, c.Min.x), y0 = (int)ImMax(za.y, c.Min.y);
+            const int x1 = (int)ImMin(zb.x, c.Max.x), y1 = (int)ImMin(zb.y, c.Max.y);
+            const int vw = x1 - x0, vh = y1 - y0;
+            CHECK(vw >= 400 && vh >= 200, "zoom 2: %d x %d px show", vw, vh);
+            unsigned char* zf = vw > 0 && vh > 0 ? (unsigned char*)malloc((size_t)vw * (size_t)vh * 4) : nullptr;
+            if (zf) {
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(x0, FBH - y1, vw, vh, GL_RGBA, GL_UNSIGNED_BYTE, zf);
+                CHECK(glGetError() == GL_NO_ERROR, "zoom 2: glReadPixels() of framebuffer 0");
+                size_t zd = 0, zfirst = (size_t)-1;
+                for (int y = 0; y < vh; y++)
+                    for (int x = 0; x < vw; x++) {
+                        // framebuffer rows go up, ImGui's down; the texture's rows go up
+                        const int sy = y1 - 1 - y, sx = x0 + x;
+                        const int tx = (sx - (int)za.x) / 2, ty = DH - 1 - (sy - (int)za.y) / 2;
+                        const unsigned char* f = zf + ((size_t)y * (size_t)vw + (size_t)x) * 4;
+                        const unsigned char* t = t1 + ((size_t)ty * DW + (size_t)tx) * 4;
+                        if (memcmp(f, t, 4) != 0) {
+                            if (zfirst == (size_t)-1) zfirst = (size_t)sy * 100000 + (size_t)sx;
+                            zd++;
+                        }
+                    }
+                CHECK(zd == 0, "zoom 2: framebuffer 0 is the texture, 2 x 2 px a texel: %zu px differ, the first at (%zu, %zu)", zd,
+                      zfirst == (size_t)-1 ? 0 : zfirst % 100000, zfirst == (size_t)-1 ? 0 : zfirst / 100000);
+                free(zf);
+            }
+        }
+        // back to 1:1 for the rest
+        z.scale = DSG_PV_SCALE_1TO1;
+        z.zoom = 1;
+        dsg_preview_set(ui_preview(), &z);
+        frame(true, true);
     }
 
     // 3. the word at its place, in its row's ink

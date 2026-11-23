@@ -3678,6 +3678,137 @@ ran here: no real player, no window). It should measure and see:
   the Run view, the rig combo and the preview's band, the "A run goes"
   question, and the loop's wait with `ui_run_wait_ms()`.
 
+#### Preview size (2026-11-23)
+
+Branch `step6-pvsize`, from `designer-step6` (`3142888`). The hand test of
+steps 5 and 6 found the preview too small to read small text: at Fit, a
+1920 x 1080 display in a pane about 45 % of the window wide. The user chose
+(2026-11-23) zoom and pan, a pane of any width, and a window of its own.
+
+**Part 1: zoom, pan, the splitter and the details (as built).**
+- **Zoom steps.** The wheel over the display steps through 1/8, 1/6, 1/4,
+  1/3, 1/2, 2/3, 1, 2, 3, 4, 6, 8, 12 and 16 framebuffer px per
+  participant px (`DSG_PV_ZOOM_MIN` to `_MAX`). From 1 up each step is a
+  whole number, so a participant px is a whole square of device px.
+  Decision 6 holds: the nearest sampler at a whole zoom of 1 or more (the
+  bytes exact), ImGui's linear sampler below 1, and no mipmaps. Scaled
+  below 1, the pane says "Scaled: fine patterns alias; use 1:1". A
+  touchpad's part notches add up to whole steps. The chart's zoom (a
+  factor of 1.15 a notch) was not taken: most of its zooms are not whole,
+  and above 1 they would need the linear sampler.
+- **About the cursor.** A step keeps the participant point under the
+  cursor where it is, within the half device px that the image's corner
+  snaps to, on an axis where the image is larger than the display's area.
+  Where the image is smaller, it stays inside the area, so the anchor
+  holds there only while the image does not reach the area's edge. The
+  readout after "1:1" gives the zoom in percent.
+- **Presets.** Fit (the largest zoom that fits, at most 1, at the area's
+  start, as before) and 1:1 (about the area's middle). The view file's
+  part `preview` keeps `"scale"` as `"fit"`, `"1:1"` or `"zoom"` with
+  `"zoom": z`; a zoom out of its bounds reads as Fit. The pan is not kept:
+  it depends on the pane's size.
+- **Pan: a middle drag.** The left button and the cursor are the
+  session's: a left click claims the keyboard, and the cursor over the
+  display is the pointer of every `position2d` role, held down or not.
+  Space and a drag was rejected: while the keyboard is claimed, Space is
+  the session's key (`preview/key_space`). A pan only outside the
+  session's claim was rejected: it would change what a drag does when a
+  click has claimed the keyboard. The middle button reaches no session
+  (`preview.h` has no button input), and the chart pans with it too. A
+  middle press claims no keyboard. The image covers the area on an axis
+  where it is larger, and stays inside it where it is smaller.
+- **The pointer.** Participant px are `(cursor - the image's corner) x W /
+  the image's width`, with the corner as drawn (whole framebuffer px) at
+  any zoom and pan. The item that takes the cursor and the clicks is the
+  part of the image that shows, so the area outside the image sends
+  `inside` false.
+- **The display's area** is the room's height, or the image's when that
+  is less, so Fit's layout and size are as before. The 1:1 child's scroll
+  bars are gone: the pan replaces them.
+- **The splitter** is the spacing between the main view and the AUX pane
+  (`//##designer/##aux_split`). A drag sets the pane's share of the room
+  that the side column leaves; the main view keeps at least 240 points
+  when there is room, and the pane at least 320, as before. The share goes
+  in a part of its own, `"aux": {"width": share}` (`ui.cpp`), because the
+  pane holds the Run view too; 0.15 to 0.85, else the default 0.45.
+- **Details.** The "Details" check box in the controls folds the
+  settings, the outputs and the data set. The display then takes their
+  room, less two rows for what comes and goes under it (the alias note,
+  the choice strip). The fixed rows rule of the 2026-11-21 hand test holds
+  folded too: a row above the display that comes and goes (the issue, the
+  stale and note banners) moves it down and does not rescale it. The part
+  `preview` keeps `"details"`.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release):
+- `test_designer_ui` (261 checks, 79 new or changed since 182): part 8,
+  the part `preview` with `"details"` and a zoom round-trips, and a zoom
+  of 40 or 0.1 reads as Fit; the part `aux` is written with the default
+  share, and a share of 0.6 written by hand sets the pane's width, 0.95
+  reads as 0.45. Part 10, on the double with fake GL caps: a wheel notch
+  over the display at 1:1 gives zoom 2, the image 1600 x 1200 px at a
+  whole px, its corner moved so the cursor's px stays (100, 50), with no
+  new pointer call; the nearest sampler around it and no alias note; a
+  middle drag of (-60, -40) moves the image by that, claims no keyboard,
+  and the cursor's px stays; (301, 123) px into the panned image is (150.5,
+  61.5); a left click claims the keyboard; a far drag stops with the
+  image's corner at the area's; two notches down give 1:1, then 2/3 with
+  no sampler callback and the alias note; folded, no details child.
+- `test_designer_te`, three new tests on part A's preview: `preview/zoom`
+  (the first notch above Fit; each later step about the cursor within half
+  a device px where the image covers the area, to 2; a middle drag of
+  (-80, -50) moves the image so and keeps the cursor's px; the mapping
+  `(cursor - corner) / 2` exact; a left click claims the keyboard; Fit
+  again; below Fit a drag moves the image to the area's right edge and no
+  further, and Fit puts it back), `preview/split` (a drag of -150 widens
+  the pane by 150 and narrows the main view by 150, within 1 point; the
+  width is back after a save, another project and this one again; a drag
+  far left leaves the main view at least 200 wide) and `preview/details`
+  (a 600 x 1200 display, bound by the height: folded, no details child
+  and the display at least 50 points taller; the stale banner does not
+  rescale it; unfolded, it gives the room back). 50 of 50. The test reads
+  the image's box from the headless gray box: ImGui 1.93 draws a fill
+  whose corners are not on whole px with an antialiased fringe, so its
+  opaque vertices are 0.5 px inside the box.
+- `test_designer_preview_gl` (25 checks, 6 new): 2b, zoom 2 after a middle
+  drag of (-37, -21), so the pan is not a whole number of texels:
+  framebuffer 0 is the texture with each texel a 2 x 2 square of px, 0 px
+  differ over the part that shows, on llvmpipe (LLVM 15.0.6) and on the
+  RX 6600 (radeonsi).
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on the changed files and emcc (`-fsyntax-only`) on
+  the pane, `ui.cpp` and `preview_part.c`: no warning. The Release build
+  gives no warning.
+
+**Hand mutants** (each reverted; each fails the test named):
+
+| Mutant | Fails |
+|---|---|
+| z-01: the wheel zooms about the corner, not the cursor | ui part 10: about the cursor; te `preview/zoom` |
+| z-02: a middle drag does not pan | ui part 10: a middle drag moves the image; te `preview/zoom` |
+| z-03: a middle press claims the keyboard | ui part 10; te `preview/zoom` |
+| z-04: the pointer from the visible corner, not the image's | ui part 10: (150.5, 61.5); te `preview/zoom` |
+| z-05: the nearest sampler only at 1:1 | ui part 10: zoom 2, the nearest sampler; GL 2b: 7,923 px differ |
+| z-06: the nearest sampler below 1 too | ui part 10: Fit and 2/3, no sampler change |
+| z-07: no clamp of the pan | ui part 10: a far drag stops at the area's corner |
+| z-08: the wheel zooms by 1.15 | ui part 10: zoom 2; te `preview/zoom` |
+| z-09: a zoom written as Fit | ui part 8: the zoom's JSON |
+| z-10: a zoom read without its bounds | ui part 8: a zoom of 40 or 0.1 is Fit |
+| z-11: `"details"` not written | ui part 8: the part holds the settings |
+| z-12: folded, the display keeps the 7 rows | te `preview/details`: 50 points taller |
+| z-13: folded, the details still drawn | ui part 10; te `preview/details` |
+| z-14: the Details box changes nothing | te `preview/details` |
+| z-15: folded, the rows that come and go rescale the display | te `preview/details`: the stale banner |
+| z-16: Fit keeps the pan | te `preview/zoom`: Fit puts the image back |
+| s-01: a splitter drag changes nothing | te `preview/split` |
+| s-02: the part `aux` not written | ui part 8; te `preview/split` |
+| s-03: the part `aux` not read at an open | ui part 8: the share 0.6; te `preview/split` |
+| s-04: a share out of its bounds read | ui part 8: 0.95 reads as 0.45 |
+| s-05: the main view keeps no least width | te `preview/split`: at least 200 |
+
+**Not done in part 1.** The window was not opened: no person used the
+wheel, the drag or the splitter on a display. The 1:1 preset's zoom about
+the area's middle has no test.
+
 ## First version
 
 In:
@@ -4800,7 +4931,8 @@ test checks both.
 - Decision 6: at 1:1 the image draws with ImGui's nearest sampler (its
   draw callback), so the bytes are exact; at Fit, with ImGui's linear
   sampler. No mipmaps. Scaled, fine gratings alias, and the panel says
-  "Scaled: fine patterns alias; use 1:1".
+  "Scaled: fine patterns alias; use 1:1". Since 2026-11-23 the nearest
+  sampler also draws every whole zoom above 1 ("Preview size").
 - Rows: the texture is bottom-up (GL's order), so `ImGui::Image()` takes
   `uv0 = (0, 1)`, `uv1 = (1, 0)`.
 
