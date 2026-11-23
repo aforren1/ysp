@@ -45,7 +45,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.18.0"
+#define PL_VERSION_STRING "0.19.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -711,6 +711,8 @@ struct pl_player {
     yexp_report report;
     const char* canon; size_t canon_n;
     char      experiment_id[65], stored_id[65];
+    char      def_writer[32];   /* the ysp/experiment.h that wrote the
+                                 * definition, from the manifest; "" none  */
     char      pack_id[72];
     int       n_field_values;
     pl_val*   field_values;

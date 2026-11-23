@@ -853,3 +853,32 @@ env = { PL_SIM_CASES = "rig" }
 why = "0.18.0: afc2 with the room profile and pl_sim_desc.cal: the need is met, as in the check."
 find = '''    const ycol_cal* given = p->sim.on ? p->sim.cal : p->check_cal;'''
 replace = '''    const ycol_cal* given = p->check_cal;'''
+
+# --- 0.19.0: the definition with its writer's defaults (ysp/experiment.h 0.7.0) ---
+
+[[mutant]]
+id = "p19-01"
+name = "the definition read with this header's defaults"
+test = "sim"
+env = { PL_SIM_CASES = "align" }
+why = "A pack that ypak 0.12.0 built laid a text with no align out at the start; read as center, the player finds no block for it."
+find = '''rc = yexp_load_written(&p->arena, (const char*)data, (size_t)e.size, &host, p->def_writer, &p->def, &p->report);'''
+replace = '''rc = yexp_load(&p->arena, (const char*)data, (size_t)e.size, &host, &p->def, &p->report);'''
+
+[[mutant]]
+id = "p19-02"
+name = "no writer: every pack read with the oldest defaults"
+test = "sim"
+env = { PL_SIM_CASES = "align" }
+why = "A pack this tool built centers a text with no align; read as start, the player finds no block for it."
+find = '''rc = yexp_load_written(&p->arena, (const char*)data, (size_t)e.size, &host, p->def_writer, &p->def, &p->report);'''
+replace = '''rc = yexp_load_written(&p->arena, (const char*)data, (size_t)e.size, &host, NULL, &p->def, &p->report);'''
+
+[[mutant]]
+id = "p19-03"
+name = "the derivation's prefix not matched"
+test = "sim"
+env = { PL_SIM_CASES = "align" }
+why = "Only \"ysp/experiment.h X.Y.Z\" names the writer; another record gives none."
+find = '''memcmp(b->u.s, by, sizeof by - 1) == 0)'''
+replace = '''memcmp(b->u.s, by, sizeof by - 1) != 0)'''

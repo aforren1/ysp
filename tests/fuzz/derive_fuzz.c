@@ -12,8 +12,8 @@
  * (ypt_check_lookups, pack tool v0.7.0): a refusal must carry a message,
  * and every warning must be one non-empty line.
  *
- * One translation unit: it includes pack/derive.c and the json and table
- * implementations, so no CMake target is needed.
+ * One translation unit: it includes pack/derive.c and the json, table and
+ * experiment implementations, so no CMake target is needed.
  *
  * libFuzzer, MSVC 2022 x64 (from the repository root, in a vcvars shell):
  *     cl /nologo /O1 /Zi /fsanitize=address /fsanitize=fuzzer /Iinclude /Ipack tests\fuzz\derive_fuzz.c
@@ -38,6 +38,8 @@
 #define YSP_PACK_IMPLEMENTATION
 #define YPAK_NO_FILE
 #include "ysp/pack.h"
+#define YSP_EXPERIMENT_IMPLEMENTATION
+#include "ysp/experiment.h"
 #include "derive.c"
 
 #include <stdio.h>

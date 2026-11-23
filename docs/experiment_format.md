@@ -1245,7 +1245,7 @@ format versions. A response with `max_responses` above 0 or
 |---|---|---|
 | `shape`, `grating`, `gabor`, `noise` | `ygfx_shape()`, `ygfx_grating()`, `ygfx_gabor()`, `ygfx_noise()` | none |
 | `image` | `ygfx_image()` | `texture`: a TEXTURE entry, or a variable whose levels are entries |
-| `text` | `ygfx_crun()` per run of the block whose key `ypak_runs_key()` gives for the stimulus's style and text, in the experiment's GLYPHRUNS entry (D14; pack.md 4.5) | `font`: a FONT entry; `text`; `size`; `width`; `line_height`, `align`, `dir`, `lang` as in a glyph-run block. Each is a literal, not a variable: the pack tool lays the text out |
+| `text` | `ygfx_crun()` per run of the block whose key `ypak_runs_key()` gives for the stimulus's style and text, in the experiment's GLYPHRUNS entry (D14; pack.md 4.5) | `font`: a FONT entry; `text`; `size`; `width`; `line_height`, `align`, `dir`, `lang` as in a glyph-run block, but `align` defaults to `center`, which centers each line in the `width` box (from 2026-11-23, 2.11). Each is a literal, not a variable: the pack tool lays the text out |
 | `artwork` | `ygfx_crun()` over an ARTWORK entry | `artwork` |
 | `rdk` | `yrdk_open()` and `ygfx_dots()`; `yrdk_start(&f, $trial_seed, 0)` on its first visible frame, `yrdk_update(&f, onset - first onset)` each frame | none |
 | `sound` | `yau_wav_load()`, `yau_play_at()` | `audio`: an AUDIO entry |
@@ -1351,6 +1351,40 @@ change is inside version 1, and there is no migration: no AEP definition
 existed outside this repository. Reason: the format uses the names of the
 C fields, and the Windows SDK defines `hyper` as a macro (`__int64`), so a
 C file that included `<windows.h>` before ysp/aep.h did not compile.
+
+Note (2026-11-23): a text stimulus's `align` defaults to `"center"`, not
+`"start"` (ysp/experiment.h 0.7.0, the pack tool 0.13.0, the player
+0.19.0). The user decided it. Evidence: stroop's word, with a 1000 px
+`width` box and no `align`, drew about 500 px left of the display's
+center; PsychoPy and jsPsych center text by default; `trial_stroop.c`
+centers every text. The change is inside versions 1 and 2, with no
+migration step. D12 raises the version for a changed meaning; this change
+is an exception to that rule. What changes:
+
+- A file that leaves `align` out now centers each line in the `width`
+  box. A single line with no `width` keeps its place (its box is the
+  line). Lines of different lengths center on the longest.
+- The canonical bytes (D2) leave the new default out. A file that writes
+  `"start"` keeps the key and gets a new experiment ID. A file that writes
+  `"center"` loses the key and gets a new experiment ID. A file that
+  leaves `align` out keeps its bytes and its experiment ID, but its
+  meaning changes, so the experiment ID alone does not tell the two
+  meanings apart. The pack's manifest does (below).
+- A canonical writer (the designer's Save, the pack tool) left out an
+  explicit `"start"` before this change, because it was the default.
+  Nothing can restore it: such a file now centers. To keep the old
+  placement, write `"align": "start"` again.
+- A pack built before the change plays as it was built. The manifest
+  records the ysp/experiment.h version that wrote the definition: the
+  experiment entry's derivation, `"by": "ysp/experiment.h 0.6.0"` (pack
+  tool 0.8.0 and later). The player loads the definition with that
+  version's defaults (`yexp_load_written()`), so there a text with no
+  `align` is `"start"`, the player finds the glyph-run blocks that the
+  pack has, and the experiment ID is the one that the pack recorded. A
+  pack with no such record is read with the oldest defaults.
+- A player before 0.19.0 cannot play a pack that the pack tool 0.13.0
+  built from a text with no `align`. It asks for a `start` block, which
+  the pack does not have, and stops with "no glyph run block".
 
 Version 2 (proposed 2026-11-11) is part 3. 3.2 gives the migration step
 from version 1.
@@ -1660,7 +1694,8 @@ one step (D12):
 2. Each stimulus's `visible` key is left out (D41, item 2). The player
    ignores that key in version 1, so the meaning stays the same.
 3. Nothing else changes. Every key of part 2 means in version 2 what it
-   means in version 1. A version 1 template has `events`, `response` and
+   means in version 1. A text's `align` default changed in both versions
+   on 2026-11-23 (2.11); the step does not write it. A version 1 template has `events`, `response` and
    `after`, and no `states`, so it runs as D7 says. `end` and `response`
    are reserved only in a template with `states` (3.9), so no version 1
    name becomes invalid.

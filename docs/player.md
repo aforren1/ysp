@@ -1,6 +1,10 @@
 # The player
 
-Status: v0.18.0, 2026-11-22 (0.18.0: `--version`; `--sim` stops on
+Status: v0.19.0, 2026-11-23 (0.19.0: a pack's definition loads with the
+defaults of the ysp/experiment.h that wrote it, so a pack built before a
+default changed plays as built,
+[Old packs and changed defaults](#explanation-old-packs-and-changed-defaults-0190);
+0.18.0: `--version`; `--sim` stops on
 SIGTERM as a real run stops on Shift+Esc; `pl_check_desc.rig`, the check
 against a rig profile, [With a rig profile](#with-a-rig-profile-0180),
 and the stepped session's `pl_sim_desc.rig` with the same rules and the
@@ -1729,7 +1733,59 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 | L1 (low): keys and buttons are 0 only when stamped on arrival | A response box behind a transport needs a measured bound or is refused |
 | L2 (low): the lag per state row | A state row's `t_s` minus the `end_s` of the visit before (no column: the coordinator's decision, 2026-11-15); `trials.csv` `exit_lag_max_s` |
 
+## Explanation: old packs and changed defaults (0.19.0)
+
+A pack's definition is canonical bytes, and the canonical bytes leave out
+every key at its default (format D2). The defaults are ysp/experiment.h's
+table. When a later header changes a default inside a format version, the
+same stored bytes mean something else. That happened once: on 2026-11-23
+a text's `align` default became `center` (format 2.11, ysp/experiment.h
+0.7.0). A pack that ypak 0.12.0 or earlier built has no `align` in its
+definition, and its glyph-run blocks were laid out at the start, keyed
+`start`. Read with 0.7.0's defaults, the player would ask for `center`
+blocks, find none, and stop.
+
+So the player reads which header wrote the definition. The manifest
+records it as the experiment entry's derivation, `"by": "ysp/experiment.h
+0.6.0"` (pack tool 0.8.0 and later). `pl_definition_writer()` reads it
+into `p->def_writer`, and the load calls `yexp_load_written()` with it: a
+key whose default changed after that version takes the default that
+version had, in the form and in the canonical bytes. So the player finds
+the blocks the pack has, draws the text where the old player drew it, and
+records the experiment ID that the pack recorded. A pack with no such
+record (tool before 0.8.0) is read with the oldest defaults. A pack that
+this release's tool built names ysp/experiment.h 0.7.0 and reads with its
+defaults.
+
+Options that were not taken:
+
+- Look up the `center` key and fall back to `start`. In an old pack a
+  stimulus with no `align` and another with `"align": "center"` of the
+  same font, size, width and text share the lookup: the first would get
+  the second's centered block. The writer's version is exact.
+- Raise the format version, with a migration step that writes
+  `"align": "start"`. The user decided that a file with no `align` is
+  centered, and a migration would keep every old file at the start.
+
+A player before 0.19.0 asks for a `start` block in a pack that the tool
+0.13.0 built from a text with no `align`, and stops with "no glyph run
+block". Update the player with the tool.
+
 ## Results
+
+### Old packs and the align default (0.19.0, 2026-11-23)
+
+Linux desktop (i5-14500, Debian 12, gcc 12.2), Release, `DISPLAY` and
+`WAYLAND_DISPLAY` unset; the draws on Mesa llvmpipe through EGL, no
+window. No real run was started. Nothing here is a timing claim.
+
+| Check | Result |
+|---|---|
+| An old pack, by the old tool | stroop (`tests/player/stroop`, NotoSans-Regular) built by ypak 0.12.0 at 3142888, played with `--sim --seed 7` by the player 0.18.0 (3142888) and by 0.19.0: `trials.csv`, `events.csv`, `frames.csv`, `clock.csv` and the streams byte-identical; `session.json` differs in `player_version` and ysp/experiment.h's version only, and the experiment ID is the pack's (`260eeb19...`). A stepped session of each at 1920 x 1080, every one of 3,253 frames drawn and read: all equal. The word of the first trial from column 466 to 632 in both |
+| A new pack | stroop built by ypak 0.13.0: the same data; the word from column 878 to 1043 (middle 961 of 1920) |
+| A player and a pack of different defaults | The player 0.18.0 on the new pack stops: "stimulus 'banner': no glyph run block for the text 'Practice. Name the ink color, not the word.'". The old pack read with this header's defaults (mutant p19-01, below): its session fails the same way |
+| `test_player_sim` (13) `align` | stroop at 1200 x 400: the word, with no `align`, from column 518 to 683 (middle 601); stroop_start (`"align": "start"`) from 106 to 272, the box's edge at 100; stroop_old (`tests/player/align_packs.py`) loads with writer `0.6.0`, and its `--sim` data and 150 drawn frames equal stroop_start's. 788 checks (8 new); ASan with UBSan (`setarch -R`, the case alone): no report |
+| Mutants (`player_lower.toml`, test `sim`, case `align`) | p19-01 (`yexp_load()`, this header's defaults), p19-02 (no writer: the oldest defaults), p19-03 (the derivation's prefix not matched): 3 of 3 killed |
 
 ### --version, the stop on SIGTERM and the check's rig (0.18.0, 2026-11-22)
 

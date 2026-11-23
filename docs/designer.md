@@ -1552,19 +1552,21 @@ stroop font is missing.
    every alpha is 255. The image is 1100 x 360 px at a whole px, inside
    the clip rectangle of the display's child window.
 3. The word is at its place, in its row's ink. Stroop's text box is
-   1000 px wide at the display's center, and its lines start at the box's
-   left edge (align `start`). So the word starts at 57 px (the box's edge,
-   50 px, and B's side bearing: the seed's first word is BLUE), not at the
-   display's center. Its middle is at row 182 of 360. Its strongest
-   channel is its row's ink (red).
+   1000 px wide at the display's center, and a text with no `align` is
+   centered in it (ysp/experiment.h 0.7.0, 2026-11-23; format 2.11). So
+   the word's ink is from column 469 to 633, its middle at 551 of 1100
+   (the side bearings move it 1 px). Its middle row is 182 of 360. Its
+   strongest channel is its row's ink (red). Before 0.7.0 its lines
+   started at the box's left edge (`start`), and the word started at
+   57 px.
 4. Restart, the same seed, stepped again to frame 130 with no ImGui frame
    drawn between the steps: gfx gives the same bytes as with an ImGui
    frame before each step.
 
 The pbuffer is 3800 x 1200 px, so the pane (45 % of what the side column
-leaves) holds the 1100 px display at 1:1. Stroop's 1000 px text box does
-not fit a smaller display: at 480 px its word started at -260 px and the
-check found nothing.
+leaves) holds the 1100 px display at 1:1. Before ysp/experiment.h 0.7.0
+the word started at the 1000 px box's left edge, so a smaller display
+lost it: at 480 px it started at -260 px and the check found nothing.
 
 Results (Linux desktop, i5-14500, Debian 12, Mesa 22.3.6, gcc 12.2,
 Release): 19 of 19 checks on llvmpipe (LLVM 15.0.6), on the RX 6600

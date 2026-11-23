@@ -24,6 +24,8 @@
 #define YSP_PACK_IMPLEMENTATION
 #define YPAK_NO_FILE
 #include "ysp/pack.h"
+#define YSP_EXPERIMENT_IMPLEMENTATION
+#include "ysp/experiment.h"
 #include "derive.c"
 
 #include <stdio.h>
@@ -144,12 +146,12 @@ static void test_stroop(void) {
         "               \"rules\": [\"order constrained\", \"weight weight\"]}]}\n";
 #define NOTO "fonts/NotoSans-Regular.ttf#0|"
     static const char* const want[9][2] = {
-        { NOTO "22|1000|0|start|auto||R red     G green     B blue", "22" },
-        { NOTO "30|1000|0|start|auto||Practice. Name the ink color, not the word.", "30" },
-        { NOTO "30|1000|0|start|auto||Test. No feedback from here on.", "30" },
-        { NOTO "32|1000|0|start|auto||Correct", "32" }, { NOTO "32|1000|0|start|auto||Too slow", "32" },
-        { NOTO "32|1000|0|start|auto||Wrong", "32" }, { NOTO "72|1000|0|start|auto||BLUE", "72" },
-        { NOTO "72|1000|0|start|auto||GREEN", "72" }, { NOTO "72|1000|0|start|auto||RED", "72" } };
+        { NOTO "22|1000|0|center|auto||R red     G green     B blue", "22" },
+        { NOTO "30|1000|0|center|auto||Practice. Name the ink color, not the word.", "30" },
+        { NOTO "30|1000|0|center|auto||Test. No feedback from here on.", "30" },
+        { NOTO "32|1000|0|center|auto||Correct", "32" }, { NOTO "32|1000|0|center|auto||Too slow", "32" },
+        { NOTO "32|1000|0|center|auto||Wrong", "32" }, { NOTO "72|1000|0|center|auto||BLUE", "72" },
+        { NOTO "72|1000|0|center|auto||GREEN", "72" }, { NOTO "72|1000|0|center|auto||RED", "72" } };
 #undef NOTO
     ypt_texts t;
     char err[512];
@@ -157,7 +159,7 @@ static void test_stroop(void) {
     CHECK(rc == 0 && t.definition && t.n_texts == 9 && t.n_tables == 0, "stroop: rc %d, %d texts, %d tables: %s", rc, t.n_texts, t.n_tables, err);
     for (i = 0; rc == 0 && i < 9 && i < t.n_texts; i++)
         CHECK(!strcmp(t.texts[i].key, want[i][0]) && !strcmp(t.texts[i].size, want[i][1]) && !strcmp(t.texts[i].width, "1000") &&
-              !strcmp(t.texts[i].line_height, "0") && !strcmp(t.texts[i].align, "start") && !strcmp(t.texts[i].dir, "auto") &&
+              !strcmp(t.texts[i].line_height, "0") && !strcmp(t.texts[i].align, "center") && !strcmp(t.texts[i].dir, "auto") &&
               !t.texts[i].lang[0] && !strcmp(t.texts[i].font, "fonts/NotoSans-Regular.ttf"),
               "stroop text %d: %s size %s", i, t.texts[i].key, t.texts[i].size);
     CHECK(g_calls == 0, "stroop: no table read for lookups (%d calls)", g_calls);
@@ -179,9 +181,9 @@ static void test_shared(void) {
         " \"c\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 36, \"width\": 1000, \"text\": \"Hi\"},\n"
         " \"d\": {\"kind\": \"text\", \"font\": \"g.ttf\", \"size\": 72, \"width\": 1000, \"text\": \"Hi\"},\n"
         " \"e\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 72, \"width\": 1000, \"lang\": \"en\", \"text\": \"Hi\"}}}";
-    static const char* const want[5] = { "f.ttf#0|36|1000|0|start|auto||Hi", "f.ttf#0|72|1000|0|start|auto|en|Hi",
-                                         "f.ttf#0|72|1000|0|start|auto||Bye", "f.ttf#0|72|1000|0|start|auto||Hi",
-                                         "g.ttf#0|72|1000|0|start|auto||Hi" };
+    static const char* const want[5] = { "f.ttf#0|36|1000|0|center|auto||Hi", "f.ttf#0|72|1000|0|center|auto|en|Hi",
+                                         "f.ttf#0|72|1000|0|center|auto||Bye", "f.ttf#0|72|1000|0|center|auto||Hi",
+                                         "g.ttf#0|72|1000|0|center|auto||Hi" };
     static const char* const stim[5] = { "c", "e", "a", "a,b", "d" };
     ypt_texts t;
     char err[512];
@@ -202,59 +204,66 @@ static void test_shared(void) {
 static void test_forms(void) {
     make_table("words.pstb", "word,n,x\nred,1,0.5\ngreen,2,0.25\nblue,1,0.5\nred,3,1\n");
     make_table("more.pstb", "word,prize\nviolet,$5\nred,$7\n");
-    expect_texts("literal", "\"size\": 10, \"text\": \"Hello\"", LEAF, "s/Hello|10|0|0|start|auto|", "");
-    expect_texts("escaped dollar", "\"size\": 10, \"text\": \"$$5 prize\"", LEAF, "s/$5 prize|10|0|0|start|auto|", "");
-    expect_texts("empty literal", "\"size\": 10, \"text\": \"\"", LEAF, "s/|10|0|0|start|auto|", "");
+    expect_texts("literal", "\"size\": 10, \"text\": \"Hello\"", LEAF, "s/Hello|10|0|0|center|auto|", "");
+    expect_texts("escaped dollar", "\"size\": 10, \"text\": \"$$5 prize\"", LEAF, "s/$5 prize|10|0|0|center|auto|", "");
+    expect_texts("empty literal", "\"size\": 10, \"text\": \"\"", LEAF, "s/|10|0|0|center|auto|", "");
     expect_texts("column levels", "\"size\": 10, \"text\": \"$word\"", TV("words.pstb"),
-                 "s/blue|10|0|0|start|auto|\ns/green|10|0|0|start|auto|\ns/red|10|0|0|start|auto|", "words.pstb");
+                 "s/blue|10|0|0|center|auto|\ns/green|10|0|0|center|auto|\ns/red|10|0|0|center|auto|", "words.pstb");
     expect_texts("column of two tables, a container's",
                  "\"size\": 10, \"text\": \"$word\"",
                  "{\"name\": \"a\", \"timeline_variables\": \"words.pstb\", \"timeline\": [" TV("more.pstb") "]}",
-                 "s/blue|10|0|0|start|auto|\ns/green|10|0|0|start|auto|\ns/red|10|0|0|start|auto|\ns/violet|10|0|0|start|auto|",
+                 "s/blue|10|0|0|center|auto|\ns/green|10|0|0|center|auto|\ns/red|10|0|0|center|auto|\ns/violet|10|0|0|center|auto|",
                  "more.pstb,words.pstb");
     expect_texts("column in the second table only", "\"size\": 10, \"text\": \"$prize\"",
                  "{\"name\": \"a\", \"timeline_variables\": \"words.pstb\", \"timeline\": [" TV("more.pstb") "]}",
-                 "s/$5|10|0|0|start|auto|\ns/$7|10|0|0|start|auto|", "more.pstb");
+                 "s/$5|10|0|0|center|auto|\ns/$7|10|0|0|center|auto|", "more.pstb");
     expect_texts("a table cell is text, not a variable", "\"size\": 10, \"text\": \"$prize\"", TV("more.pstb"),
-                 "s/$5|10|0|0|start|auto|\ns/$7|10|0|0|start|auto|", "more.pstb");
+                 "s/$5|10|0|0|center|auto|\ns/$7|10|0|0|center|auto|", "more.pstb");
     expect_texts("vars value and choice",
                  "\"size\": 10, \"text\": {\"by\": \"$side\", \"map\": {\"left\": \"$msg\", \"right\": \"$side\"}}",
                  "{\"name\": \"main\", \"trial\": \"t\", \"vars\": {\"msg\": \"Go\", \"side\": {\"choice\": [\"left\", \"right\"]}}}",
-                 "s/Go|10|0|0|start|auto|\ns/left|10|0|0|start|auto|\ns/right|10|0|0|start|auto|", "");
+                 "s/Go|10|0|0|center|auto|\ns/left|10|0|0|center|auto|\ns/right|10|0|0|center|auto|", "");
     expect_texts("vars choice of a column",
                  "\"size\": 10, \"text\": \"$pick\"",
                  "{\"name\": \"main\", \"trial\": \"t\", \"timeline_variables\": \"more.pstb\", \"vars\": {\"pick\": {\"choice\": [\"$word\", \"none\"]}}}",
-                 "s/none|10|0|0|start|auto|\ns/red|10|0|0|start|auto|\ns/violet|10|0|0|start|auto|", "more.pstb");
+                 "s/none|10|0|0|center|auto|\ns/red|10|0|0|center|auto|\ns/violet|10|0|0|center|auto|", "more.pstb");
     expect_texts("nested lookups and duplicates",
                  "\"size\": 10, \"text\": {\"by\": \"$a\", \"map\": {\"x\": \"Same\", \"y\": {\"by\": \"$b\", \"map\": {\"1\": \"Same\", \"2\": \"Other\"}}}}",
-                 LEAF, "s/Other|10|0|0|start|auto|\ns/Same|10|0|0|start|auto|", "");
+                 LEAF, "s/Other|10|0|0|center|auto|\ns/Same|10|0|0|center|auto|", "");
     expect_texts("layout keys, canonical numbers",
-                 "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"center\", \"dir\": \"rtl\", \"lang\": \"he\", \"text\": \"x\"",
-                 LEAF, "s/x|2.5|1000|1.2|center|rtl|he", "");
+                 "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"start\", \"dir\": \"rtl\", \"lang\": \"he\", \"text\": \"x\"",
+                 LEAF, "s/x|2.5|1000|1.2|start|rtl|he", "");
+    /* 0.13.0: no align is ysp/experiment.h's default, center; start and
+     * center as written */
+    expect_texts("align: the table's default, and start written",
+                 "\"size\": 10, \"width\": 400, \"text\": {\"by\": \"$a\", \"map\": {\"x\": \"A\", \"y\": \"B\"}}",
+                 LEAF, "s/A|10|400|0|center|auto|\ns/B|10|400|0|center|auto|", "");
+    expect_texts("align: start written", "\"size\": 10, \"width\": 400, \"align\": \"start\", \"text\": \"A\"", LEAF,
+                 "s/A|10|400|0|start|auto|", "");
     {
         /* the key itself: every layout key in its field */
         char def[1024], err[256];
         ypt_texts t;
-        def_with(def, sizeof def, "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"center\", \"dir\": \"rtl\", "
+        def_with(def, sizeof def, "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"end\", \"dir\": \"rtl\", "
                                   "\"lang\": \"he\", \"text\": \"x|y\"", LEAF);
-        CHECK(derive(def, &t, err, sizeof err) == 0 && t.n_texts == 1 && !strcmp(t.texts[0].key, "f.ttf#0|2.5|1000|1.2|center|rtl|he|x|y"),
+        CHECK(derive(def, &t, err, sizeof err) == 0 && t.n_texts == 1 && !strcmp(t.texts[0].key, "f.ttf#0|2.5|1000|1.2|end|rtl|he|x|y"),
               "the key of every layout key: '%s'", t.n_texts ? t.texts[0].key : err);
         ypt_texts_free(&t);
     }
     /* the double's shortest decimal, not the source's exact one: the player
      * reads a double and spells it with yjs_format_double() */
-    expect_texts("a double's spelling", "\"size\": 0.1000000000000000055, \"text\": \"x\"", LEAF, "s/x|0.1|0|0|start|auto|", "");
-    expect_texts("size in degrees", "\"size\": 0.8, \"width\": 0, \"text\": \"x\"", LEAF, "s/x|0.8|0|0|start|auto|", "");
+    expect_texts("a double's spelling", "\"size\": 0.1000000000000000055, \"text\": \"x\"", LEAF, "s/x|0.1|0|0|center|auto|", "");
+    expect_texts("size in degrees", "\"size\": 0.8, \"width\": 0, \"text\": \"x\"", LEAF, "s/x|0.8|0|0|center|auto|", "");
     expect_texts("UTF-8 and control bytes in a text", "\"size\": 10, \"text\": \"\\u05e9\\u05dc\\u05d5\\u05dd\\nline\"", LEAF,
-                 "s/\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nline|10|0|0|start|auto|", "");
+                 "s/\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nline|10|0|0|center|auto|", "");
     /* a table that no text needs is not read, so a missing one is the loader's */
     g_calls = 0;
-    expect_texts("unused table not read", "\"size\": 10, \"text\": \"x\"", TV("nothing.pstb"), "s/x|10|0|0|start|auto|", "");
+    expect_texts("unused table not read", "\"size\": 10, \"text\": \"x\"", TV("nothing.pstb"), "s/x|10|0|0|center|auto|", "");
     CHECK(g_calls == 0, "an unused table was read (%d calls)", g_calls);
     /* one view per table, however many lookups */
     g_calls = 0;
     expect_texts("one open per table", "\"size\": 10, \"text\": {\"by\": \"$q\", \"map\": {\"a\": \"$word\", \"b\": \"$word\", \"c\": \"$word\"}}",
-                 TV("words.pstb"), "s/blue|10|0|0|start|auto|\ns/green|10|0|0|start|auto|\ns/red|10|0|0|start|auto|", "words.pstb");
+                 TV("words.pstb"), "s/blue|10|0|0|center|auto|\ns/green|10|0|0|center|auto|\ns/red|10|0|0|center|auto|", "words.pstb");
     CHECK(g_calls == 1, "table opened %d times for three lookups", g_calls);
 }
 

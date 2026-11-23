@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.6.0 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.7.0 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -132,6 +132,11 @@
  *   format 3.2's migration step: a version 1 file's canonical bytes with
  *   "version" 2 and no stimulus `visible` key (D12, D41), which load as
  *   version 2 to the same form; for a version 2 file, its canonical bytes.
+ *   A default that this header changed inside a format version (v0.7.0:
+ *   a text's `align`) changes what a stored file that leaves the key out
+ *   means. yexp_load_written() takes the version of the header that wrote
+ *   the bytes (a pack's manifest records it) and gives such a key that
+ *   version's default, in the form and in the canonical bytes.
  *
  *   ---------------------------------------------------------------------
  *   BOUNDS AND MEMORY
@@ -153,6 +158,22 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - a text stimulus's `align` defaults to "center", not "start"
+ *          (decided 2026-11-23; format 2.11, "Defaults changed inside a
+ *          version"). A text with a `width` box and no `align` sat at the
+ *          box's left edge; PsychoPy and jsPsych center text by default.
+ *          Inside format versions 1 and 2, with no migration step: a file
+ *          that leaves `align` out now centers its lines. The canonical
+ *          bytes leave the new default out, so a file that wrote "center"
+ *          gets a new experiment ID, and one that wrote "start" keeps the
+ *          key and gets a new ID too. A file that an earlier canonical
+ *          writer (the designer's Save, the pack tool) stored lost an
+ *          explicit "start", which nothing can restore; such a file now
+ *          centers. yexp_load_written() loads bytes with the defaults of
+ *          the header version that wrote them, so a pack built before this
+ *          version loads to what it meant and gives its experiment ID
+ *          again (the player reads the version from the pack's manifest).
+ *          No struct change.
  *   v0.6.0 - the format table for a designer (2026-11-20): yexp_section,
  *          yexp_row_type and the YEXP_R_* flags are public (were internal
  *          YEXP__S_*, YEXP__T_*, YEXP__R_*; the numbers do not change), so a
@@ -259,7 +280,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.6.0 (2026-11-20). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.7.0 (2026-11-23). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -272,9 +293,9 @@
 #define YSP_EXPERIMENT_H_INCLUDED
 
 #define YEXP_VERSION_MAJOR 0
-#define YEXP_VERSION_MINOR 6
+#define YEXP_VERSION_MINOR 7
 #define YEXP_VERSION_PATCH 0
-#define YEXP_VERSION_STRING "0.6.0"
+#define YEXP_VERSION_STRING "0.7.0"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -869,6 +890,18 @@ YEXP_API const char* yexp_version(void);
  * filled and *out NULL. host may be NULL (every host check is skipped). */
 YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host* host, yexp_def** out, yexp_report* report);
 
+/* As yexp_load(), for bytes that ysp/experiment.h `writer` ("0.6.0")
+ * stored: a key whose default a later version changed inside a format
+ * version (format 2.11; v0.7.0, a text's `align`) takes, when left out,
+ * the default that `writer` had, and the canonical bytes leave that
+ * default out. So a pack's stored definition loads to what it meant when
+ * the pack was built, and gives its experiment ID again. writer is
+ * MAJOR.MINOR.PATCH; NULL, "" or text that does not start with that gives
+ * the oldest defaults (a pack from before the manifest recorded the
+ * version). A version at or past this header's is yexp_load(). */
+YEXP_API int yexp_load_written(yjs_arena* a, const char* text, size_t n, const yexp_host* host, const char* writer, yexp_def** out,
+                               yexp_report* report);
+
 /* The canonical bytes (with one LF after the value) and the experiment ID,
  * the SHA-256 of those bytes. The bytes live in the arena a; *n has their
  * length. id may be NULL. YEXP_OK, YEXP_ERR_NOMEM or YEXP_ERR_ARG. */
@@ -905,6 +938,7 @@ YEXP_API const yexp_stim* yexp_stim_get(const yexp_def* d, const char* name);
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include <math.h>
 
 #ifdef __cplusplus
@@ -938,7 +972,7 @@ static bool yexp__finite(double x) { return x > -HUGE_VAL && x < HUGE_VAL; }
     { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "ahead", "6", "frame", "frames decoded ahead", NULL }, \
     { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "algorithm", "\"custom\"", "", "a published dot algorithm, which sets signal, select, noise and sets; custom: those keys", "custom=0,wn=1,mn=2,ll=3,bm=4" }, \
     { YEXP_S_STIM, 0x0060, YEXP_T_INT, 0, "aliased", "0", "", "", NULL }, \
-    { YEXP_S_STIM, 0x0020, YEXP_T_ENUM, YEXP_R_LIT, "align", "\"start\"", "", "the lines' alignment; start and end follow dir; a literal", "start=0,end=1,center=2" }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_ENUM, YEXP_R_LIT, "align", "\"center\"", "", "the lines' alignment; start and end follow dir; a literal", "start=0,end=1,center=2" }, \
     { YEXP_S_STIM, 0x02ff, YEXP_T_ENUM, 0, "anchor", "\"center\"", "", "", "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8" }, \
     { YEXP_S_STIM, 0x000a, YEXP_T_ENUM, 0, "aperture", "\"rect\"", "", "", "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7" }, \
     { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "aperture", "\"circle\"", "", "", "circle=0,rect=1" }, \
@@ -1538,6 +1572,9 @@ typedef struct yexp__ctx {
     const yexp_row*    rows;
     int                n_rows;
     int                version;
+    long               writer;        /* yexp_load_written(): the writer's
+                                       * version, MAJOR * 1000000 + MINOR *
+                                       * 1000 + PATCH; yexp_load(): LONG_MAX */
     /* version 2: the template being read, for the names of 3.9 */
     yexp_template*     tp;
     const yjs_value*   trials_src;    /* the templates' names                */
@@ -1691,14 +1728,37 @@ static int yexp__find(const yexp__ctx* c, int sect, unsigned mask, const char* k
 
 static const yexp_value* yexp__literal_from_json(yexp__ctx* c, const yexp_row* row, const yjs_value* j);
 
+/* Defaults that a later header changed inside a format version (format
+ * 2.11): before header version `until` (MAJOR * 1000000 + MINOR * 1000 +
+ * PATCH) the row's default was `was`. A stored file left out the default
+ * of the header that wrote it, so yexp_load_written() reads it with that
+ * one. The tables hold the current defaults; this list holds only what
+ * they were. */
+typedef struct yexp__was { uint8_t section; uint16_t kinds; const char* key; long until; const char* was; } yexp__was;
+static const yexp__was yexp__changed[] = {
+    { YEXP_S_STIM, (uint16_t)(1u << YEXP_TEXT), "align", 7000L, "\"start\"" },   /* v0.7.0, 2026-11-23 */
+};
+
+/* A row's default text for this load: the table's, or its writer's. */
+static const char* yexp__rowdef(const yexp__ctx* c, int ri) {
+    const yexp_row* r = &c->rows[ri];
+    size_t i;
+    for (i = 0; i < sizeof yexp__changed / sizeof yexp__changed[0]; i++) {
+        const yexp__was* w = &yexp__changed[i];
+        if (c->writer < w->until && r->section == w->section && (r->kinds & w->kinds) && yexp__streq(r->key, w->key)) return w->was;
+    }
+    return r->def;
+}
+
 /* A row's default as a value, parsed once per load. */
 static const yexp_value* yexp__default(yexp__ctx* c, int ri) {
     const yexp_row* r = &c->rows[ri];
+    const char* def = yexp__rowdef(c, ri);
     yjs_value* j;
     yjs_error e;
     if (c->defs[ri]) return c->defs[ri];
-    if (!r->def) return NULL;
-    if (yjs_parse(c->a, r->def, strlen(r->def), NULL, &j, &e) != YJS_OK) {
+    if (!def) return NULL;
+    if (yjs_parse(c->a, def, strlen(def), NULL, &j, &e) != YJS_OK) {
         if (e.code == YJS_ERR_NOMEM) c->nomem = true;
         return NULL;
     }
@@ -1785,12 +1845,12 @@ static bool yexp__json_same(const yjs_value* a, const yjs_value* b) {
 
 /* Whether a composite's canonical value is its row's default. */
 static bool yexp__at_default(yexp__ctx* c, int ri, const yjs_value* canon) {
-    const yexp_row* r = &c->rows[ri];
+    const char* def = yexp__rowdef(c, ri);
     yjs_value* j;
     yjs_error e;
-    if (!r->def) return false;
+    if (!def) return false;
     if (!c->cdefs[ri]) {
-        if (yjs_parse(c->a, r->def, strlen(r->def), NULL, &j, &e) != YJS_OK) { c->nomem = c->nomem || e.code == YJS_ERR_NOMEM; return false; }
+        if (yjs_parse(c->a, def, strlen(def), NULL, &j, &e) != YJS_OK) { c->nomem = c->nomem || e.code == YJS_ERR_NOMEM; return false; }
         c->cdefs[ri] = j;
     }
     return yexp__json_same(canon, c->cdefs[ri]);
@@ -3346,7 +3406,7 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         if (!yexp__row_value(c, ri, m, elem, slot, &cv)) continue;
         if (slot->v && cv) {
             const yexp_row* r = &c->rows[ri];
-            const yexp_value* d = r->def ? yexp__default(c, ri) : NULL;
+            const yexp_value* d = yexp__default(c, ri);
             bool at_default = d && (yexp__same(slot->v, d) || (r->type == YEXP_T_SMAP && slot->v->n == 0));
             if (at_default && (r->flags & YEXP_R_SELF) == 0) {
                 /* the same form and the same checks as when it is left out */
@@ -3365,7 +3425,7 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         if (!slots[i].given) {
             if (r->flags & YEXP_R_REQ) {
                 yexp__err(c, src->pos, "%s: '%s' is required", elem, r->key);
-            } else if (r->def && r->type != YEXP_T_OBJ && r->type != YEXP_T_SET && r->type != YEXP_T_LIST) {
+            } else if (yexp__rowdef(c, f + i) && r->type != YEXP_T_OBJ && r->type != YEXP_T_SET && r->type != YEXP_T_LIST) {
                 slots[i].v = yexp__default(c, f + i);
             }
         }
@@ -8150,7 +8210,35 @@ static void yexp__check_mark(yexp_report* r, unsigned bit, bool present) {
     else r->skipped |= bit;
 }
 
+/* A version's number for yexp__changed[]: MAJOR.MINOR.PATCH, each part
+ * at most 999; anything else is 0, the oldest. */
+static long yexp__version_num(const char* s) {
+    long part[3] = { 0, 0, 0 };
+    int k;
+    if (!s) return 0;
+    for (k = 0; k < 3; k++) {
+        int digits = 0;
+        while (*s >= '0' && *s <= '9') {
+            if (++digits > 3) return 0;
+            part[k] = part[k] * 10 + (*s++ - '0');
+        }
+        if (!digits || (k < 2 && *s++ != '.')) return 0;
+    }
+    return part[0] * 1000000L + part[1] * 1000L + part[2];
+}
+
+static int yexp__load(yjs_arena* a, const char* text, size_t n, const yexp_host* host, long writer, yexp_def** out, yexp_report* report);
+
 YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host* host, yexp_def** out, yexp_report* report) {
+    return yexp__load(a, text, n, host, LONG_MAX, out, report);
+}
+
+YEXP_API int yexp_load_written(yjs_arena* a, const char* text, size_t n, const yexp_host* host, const char* writer, yexp_def** out,
+                               yexp_report* report) {
+    return yexp__load(a, text, n, host, yexp__version_num(writer), out, report);
+}
+
+static int yexp__load(yjs_arena* a, const char* text, size_t n, const yexp_host* host, long writer, yexp_def** out, yexp_report* report) {
     yexp__ctx* c;
     yexp_def* d;
     yjs_value* root = NULL;
@@ -8172,6 +8260,7 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
     c->r = report;
     c->h = host;
     c->d = d;
+    c->writer = writer;
     d->name = "";
     d->background[0] = d->background[1] = d->background[2] = 0.5;
     c->slots = (yexp__slot*)yjs_alloc(a, YEXP__SLOT_STACK * sizeof(yexp__slot));

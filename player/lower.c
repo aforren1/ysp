@@ -2641,6 +2641,39 @@ void pl_gfx_warm(pl_player* p) {
  * from /dev/urandom, the writer, the devices, the screen, the audio device)
  * either do nothing in --sim or take pl_check()'s stand-ins; every check of
  * the definition runs in both. */
+/* The ysp/experiment.h version that wrote the experiment entry: the
+ * manifest records it as the entry's derivation ("by": "ysp/experiment.h
+ * 0.6.0", pack tool 0.8.0 and later). The pack's glyph runs were laid out
+ * with that version's defaults, so the definition loads with them
+ * (yexp_load_written(); format 2.11: ysp/experiment.h 0.7.0 centers a text
+ * that leaves `align` out, where a pack from before laid it out at the
+ * start). "" when the manifest has no such record: a pack from before it,
+ * read with the oldest defaults. */
+static void pl_definition_writer(pl_player* p, const ypak_entry* ex, char* out, size_t cap) {
+    static const char by[] = "ysp/experiment.h ";
+    ypak_entry me;
+    const void* data;
+    yjs_value* root = NULL;
+    yjs_error je;
+    const yjs_value* ents;
+    uint32_t i;
+    out[0] = 0;
+    memset(&me, 0, sizeof me);
+    memset(&je, 0, sizeof je);
+    if (ypak_find(&p->pack, YPAK_MANIFEST, &me) != 0 || !(data = pl_entry_data(p, &me))) return;
+    if (yjs_parse(&p->arena, (const char*)data, (size_t)me.size, NULL, &root, &je) != YJS_OK) return;
+    ents = yjs_get(root, "entries");
+    for (i = 0; ents && ents->type == YJS_ARRAY && i < ents->n; i++) {
+        const yjs_value* nm = yjs_get(ents->u.items[i], "name");
+        const yjs_value* d = yjs_get(ents->u.items[i], "derivation");
+        const yjs_value* b = d ? yjs_get(d, "by") : NULL;
+        if (!nm || nm->type != YJS_STRING || nm->n != ex->name_len || memcmp(nm->u.s, ex->name, ex->name_len) != 0) continue;
+        if (b && b->type == YJS_STRING && b->n > sizeof by - 1 && memcmp(b->u.s, by, sizeof by - 1) == 0)
+            snprintf(out, cap, "%s", b->u.s + sizeof by - 1);
+        return;
+    }
+}
+
 static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
     const pl_args* a = &p->args;
     ypak_entry e;
@@ -2664,9 +2697,10 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
     }
     yjs_arena_init_heap(&p->arena, 0);
     p->arena_open = true;
+    pl_definition_writer(p, &e, p->def_writer, sizeof p->def_writer);
     if (pl_rig_load(p) < 0) return -1;
     pl_host_init(p, &host);
-    rc = yexp_load(&p->arena, (const char*)data, (size_t)e.size, &host, &p->def, &p->report);
+    rc = yexp_load_written(&p->arena, (const char*)data, (size_t)e.size, &host, p->def_writer, &p->def, &p->report);
     if (rc != YEXP_OK) {
         char buf[800] = "";
         size_t used = 0;

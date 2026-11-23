@@ -28,6 +28,12 @@
  *       a session loaded on one thread with gl_caps and share and attached
  *       on the context's thread draws the frames of a direct gfx, read
  *       through pl_sim_texture() (stroop and oddball)
+ *   (13) 0.19.0, a text's align (ysp/experiment.h 0.7.0): stroop's word,
+ *       with no align, is centered on the display (its ink, on a GL
+ *       context); stroop_start's, "align": "start", starts at the box's
+ *       left edge; stroop_old (tests/player/align_packs.py: the pack that
+ *       ypak 0.12.0 built from stroop) loads with ysp/experiment.h 0.6.0's
+ *       defaults and draws and records what stroop_start does
  *   (12) 0.18.0, a desc's rig profile: the needs and refusals of pl_check()
  *       with the same profile and calibration; the profile's signal
  *       adapters, against --sim --rig; what a relative role's sample is
@@ -112,7 +118,7 @@ static int sim_frame(pl_player* p, bool draw) {
 }
 
 typedef struct pk { const char* name; char path[1100]; void* data; size_t size; } pk;
-static pk packs[8];
+static pk packs[12];
 static int n_packs;
 static char work[1100];
 static ycol_cal nominal;
@@ -1644,6 +1650,20 @@ static int build_packs(const char* dir) {
         k->name = names[i];
         if (read_file(k->path, &k->data, &k->size) != 0) return -1;
         n_packs++;
+        if (strcmp(names[i], "stroop") == 0) {
+            /* the align case's packs (sim_test.py's) */
+            static const char* const extra[2] = { "stroop_start", "stroop_old" };
+            int j;
+            snprintf(cmd, sizeof cmd, "python3 '%s/tests/player/align_packs.py' '%s' '%s/stroop_src' '%s' '%s' >/dev/null", repo, ypak, dir, k->path, dir);
+            if (system(cmd) != 0) { printf("align_packs.py failed: %s\n", cmd); return -1; }
+            for (j = 0; j < 2; j++) {
+                pk* x = &packs[n_packs];
+                snprintf(x->path, sizeof x->path, "%s/%s.ysppak", dir, extra[j]);
+                x->name = extra[j];
+                if (read_file(x->path, &x->data, &x->size) != 0) return -1;
+                n_packs++;
+            }
+        }
     }
     return 0;
 }
@@ -1981,9 +2001,118 @@ static void case_gl(void) {
     ygfx_close(&first);
     gl_close();
 }
+
+/* --- (13) a text's align: the ink on a GL context, an old pack ------------------- */
+
+enum { AL_W = 1200, AL_H = 400, AL_FRAMES = 300, AL_WORD = 130 };
+
+/* One session on the direct gfx at AL_W x AL_H for AL_FRAMES frames, every
+ * other one drawn and hashed into h; at frame AL_WORD (the first trial's
+ * word on, nothing else) the ink's columns, the pixels unlike the
+ * top-left one, in *x0 and *x1. *writer gets the player's def_writer. */
+static int al_session(const pk* k, const char* out, uint64_t* h, int* n_h, int* x0, int* x1, char* writer, size_t wcap) {
+    gl_load t;
+    uint8_t* rgba = (uint8_t*)malloc((size_t)AL_W * AL_H * 4);
+    run_opts o;
+    int rc = 0, f, a, calls = 0;
+    memset(&t, 0, sizeof t);
+    memset(&o, 0, sizeof o);
+    o.seed = 11;
+    t.p = (pl_player*)calloc(1, sizeof *t.p);
+    sim_desc(&t.d, k, &o, out);
+    t.d.width = AL_W;
+    t.d.height = AL_H;
+    *n_h = 0;
+    *x0 = AL_W;
+    *x1 = -1;
+    gl_direct = 1;
+    gl_thread_load(&t);
+    gl_direct = 0;
+    if (!t.ok) { printf("  align %s: load: %s\n", k->name, t.err); rc = -1; }
+    if (rc == 0) snprintf(writer, wcap, "%s", t.p->def_writer);
+    while (rc == 0 && (a = pl_sim_attach(t.p, 0)) != 1)
+        if (a < 0 || ++calls > 10000) { printf("  align %s: attach: %s\n", k->name, t.p->error); rc = -1; }
+    for (f = 0; rc == 0 && f < AL_FRAMES; f++) {
+        bool draw = f % 2 == 0;
+        int r = pl_sim_frame(t.p, draw);
+        if (r < 0) { printf("  align %s: frame %d: %s\n", k->name, f, t.p->error); rc = -1; break; }
+        if (draw) {
+            if (!rgba || ygfx_read_output(&t.p->gfx, 0, 0, AL_W, AL_H, rgba) != 0) { printf("  align %s: read: %s\n", k->name, ygfx_error(&t.p->gfx)); rc = -1; break; }
+            h[(*n_h)++] = fnv(rgba, (size_t)AL_W * AL_H * 4);
+            if (f == AL_WORD) {
+                size_t i;
+                for (i = 1; i < (size_t)AL_W * AL_H; i++)
+                    if (memcmp(rgba + i * 4, rgba, 4) != 0) {
+                        int x = (int)(i % AL_W);
+                        if (x < *x0) *x0 = x;
+                        if (x > *x1) *x1 = x;
+                    }
+            }
+        }
+        if (r == 1) break;
+    }
+    pl_sim_stop(t.p);
+    pl_sim_detach(t.p);
+    pl_close(t.p);
+    free(t.p);
+    free(rgba);
+    return rc;
+}
+
+static void align_ink(void) {
+    static uint64_t h[3][AL_FRAMES];
+    static const char* const names[3] = { "stroop", "stroop_start", "stroop_old" };
+    int n_h[3] = { 0, 0, 0 }, x0[3] = { 0, 0, 0 }, x1[3] = { 0, 0, 0 }, i, j, same = 0;
+    char writer[3][32];
+    char dir[1200], lab[64];
+    const char* why = gl_open();
+    if (why) {
+        printf("  align: ink skipped: %s\n", why);
+        gl_close();
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        snprintf(lab, sizeof lab, "align_%s", names[i]);
+        path_in(dir, sizeof dir, lab);
+        writer[i][0] = 0;
+        CHECK(al_session(pack_of(names[i]), dir, h[i], &n_h[i], &x0[i], &x1[i], writer[i], sizeof writer[i]) == 0, "align %s: the session failed",
+              names[i]);
+    }
+    gl_close();
+    /* the box is 1000 px at the display's center: 100 to 1100 */
+    CHECK(x1[0] > x0[0] && abs(x0[0] + x1[0] + 1 - AL_W) <= 6, "align: stroop's word, no align, is not centered: ink %d to %d on %d px", x0[0], x1[0], AL_W);
+    CHECK(x1[1] > x0[1] && x0[1] >= 100 && x0[1] <= 110 && x1[1] < AL_W / 2, "align: stroop_start's word does not start at the box's edge, 100: ink %d to %d",
+          x0[1], x1[1]);
+    CHECK(!strcmp(writer[0], YEXP_VERSION_STRING) && !strcmp(writer[2], "0.6.0"), "align: the definitions' writers '%s' and '%s'", writer[0], writer[2]);
+    for (j = 0; j < n_h[1] && j < n_h[2]; j++)
+        if (h[1][j] == h[2][j]) same++;
+    CHECK(n_h[1] == AL_FRAMES / 2 && n_h[2] == n_h[1] && same == n_h[1], "align: %d of %d drawn frames of the old pack equal stroop_start's (%d drawn)", same,
+          n_h[1], n_h[2]);
+    printf("  align: ink of the word: no align %d to %d, start %d to %d, old pack %d to %d (%d px); old pack's frames %d of %d equal\n", x0[0], x1[0], x0[1],
+           x1[1], x0[2], x1[2], AL_W, same, n_h[1]);
+}
 #else
 static void case_gl(void) { printf("  gl: skipped: not built with PL_SIM_GL (Linux, GNU ld)\n"); }
+static void align_ink(void) { printf("  align: ink skipped: not built with PL_SIM_GL (Linux, GNU ld)\n"); }
 #endif
+
+static void case_align(void) {
+    static const char* const names[3] = { "stroop", "stroop_start", "stroop_old" };
+    char a[1200], b[1200];
+    run_opts o;
+    int i;
+    for (i = 0; i < 3; i++)
+        if (!pack_of(names[i])) { printf("  align: no %s pack, skipped\n", names[i]); return; }
+    /* the data: the old pack's --sim run is stroop_start's; the player
+     * finds its "start" blocks */
+    memset(&o, 0, sizeof o);
+    o.seed = 11;
+    path_in(a, sizeof a, "align_start_sim");
+    path_in(b, sizeof b, "align_old_sim");
+    CHECK(ref_run(pack_of("stroop_start"), &o, a) == 0 && ref_run(pack_of("stroop_old"), &o, b) == 0 && same_data(a, b, "align old"),
+          "align: the old pack's --sim data are not those of the pack with start written");
+    align_ink();
+}
 
 int main(int argc, char** argv) {
     int i;
@@ -1992,7 +2121,7 @@ int main(int argc, char** argv) {
     for (i = 1; i < argc; i++) {
         const char* eq = strchr(argv[i], '=');
         if (strcmp(argv[i], "--keep") == 0 && i + 1 < argc) { keep = argv[++i]; continue; }
-        if (!eq || n_packs == 8) { printf("usage: test_player_sim NAME=PACK... [--keep DIR]\n"); return 2; }
+        if (!eq || n_packs == (int)(sizeof packs / sizeof packs[0])) { printf("usage: test_player_sim NAME=PACK... [--keep DIR]\n"); return 2; }
         packs[n_packs].name = argv[i];
         argv[i][eq - argv[i]] = 0;
         snprintf(packs[n_packs].path, sizeof packs[n_packs].path, "%s", eq + 1);
@@ -2022,6 +2151,7 @@ int main(int argc, char** argv) {
         RUN("codes", case_codes);
         RUN("gl", case_gl);
         RUN("rig", case_rig);
+        RUN("align", case_align);
 #undef RUN
     }
 #if defined(PL_SIM_COUNT)

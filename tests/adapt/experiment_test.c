@@ -1917,6 +1917,119 @@ static void run_f26b(void) {
     }
 }
 
+/* 0.7.0: a text's `align` defaults to "center" (format 2.11). A text that
+ * leaves it out centers; "start" is kept in the canonical bytes, "center"
+ * is left out. yexp_load_written() gives bytes stored by an older header
+ * that header's default ("start" before 0.7.0), in the form and in the
+ * canonical bytes, so the stored bytes come back unchanged. */
+static const char* align_of(const yexp_def* d, const char* stim, bool* given) {
+    const yexp_stim* s = yexp_stim_get(d, stim);
+    const yexp_prop* p = s ? yexp_prop_get(s->props, s->n_props, "align") : NULL;
+    if (given) *given = p ? p->given : true;
+    return p && p->value && p->value->kind == YEXP_V_STRING ? p->value->str : "";
+}
+
+static void run_align(void) {
+    static yexp_report r;
+    int ver;
+    for (ver = 1; ver <= 2; ver++) {
+        char doc[900];
+        yjs_arena a;
+        yexp_def* d = NULL;
+        const char* bytes = NULL;
+        size_t n = 0;
+        bool given = true;
+        int rc;
+        snprintf(doc, sizeof doc,
+                 "{\"format\":\"ysp-experiment\",\"version\":%d,\"stimuli\":{"
+                 "\"a\":{\"kind\":\"text\",\"font\":\"f.ttf\",\"size\":20,\"width\":400,\"text\":\"A\"},"
+                 "\"b\":{\"kind\":\"text\",\"font\":\"f.ttf\",\"size\":20,\"width\":400,\"text\":\"B\",\"align\":\"start\"},"
+                 "\"c\":{\"kind\":\"text\",\"font\":\"f.ttf\",\"size\":20,\"width\":400,\"text\":\"C\",\"align\":\"center\"},"
+                 "\"e\":{\"kind\":\"text\",\"font\":\"f.ttf\",\"size\":20,\"width\":400,\"text\":\"E\",\"align\":\"end\"}},"
+                 "\"trials\":{\"t\":{\"events\":[{\"on\":[\"a\",\"b\",\"c\",\"e\"]},{\"wait_s\":1}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}",
+                 ver);
+        /* this header's defaults */
+        yjs_arena_init_heap(&a, 0);
+        rc = yexp_load(&a, doc, strlen(doc), NULL, &d, &r);
+        CHECK2(rc == YEXP_OK, "align: the file loads", r.n_diags ? r.diags[0].msg : doc);
+        if (rc == YEXP_OK) {
+            CHECK(!strcmp(align_of(d, "a", &given), "center") && !given, "align: a text with no align is centered (the default)");
+            CHECK(!strcmp(align_of(d, "b", &given), "start") && given, "align: an explicit start stays start");
+            CHECK(!strcmp(align_of(d, "c", &given), "center") && !given, "align: an explicit center is the default");
+            CHECK(!strcmp(align_of(d, "e", &given), "end") && given, "align: an explicit end stays end");
+            CHECK(yexp_canonical(d, &a, &bytes, &n, NULL) == YEXP_OK, "align: canonical bytes");
+            CHECK2(bytes && strstr(bytes, "\"align\": \"start\"") && !strstr(bytes, "\"align\": \"center\"") && strstr(bytes, "\"align\": \"end\""),
+                   "align: the canonical bytes keep start and end and leave center out", bytes);
+        }
+        yjs_arena_free(&a);
+        /* bytes that 0.6.0 stored: start was the default, so it is left out */
+        {
+            static const char* const old_writers[] = { "0.6.0", "0.1.0", "", NULL, "x", "0.6", "1000.0.0", "0.6.x", "0.7.x", "0.7" };
+            static const char* const new_writers[] = { "0.7.0", "0.7.1", "0.8.0", "1.0.0", "0.7.0-rc1" };
+            const char* stored = NULL;
+            size_t sn = 0, k;
+            yjs_arena_init_heap(&a, 0);
+            rc = yexp_load_written(&a, doc, strlen(doc), NULL, "0.6.0", &d, &r);
+            CHECK2(rc == YEXP_OK, "align: the file loads as 0.6.0 wrote it", r.n_diags ? r.diags[0].msg : doc);
+            if (rc == YEXP_OK) {
+                CHECK(!strcmp(align_of(d, "a", &given), "start") && !given, "align: as 0.6.0 wrote it, no align is start (its default)");
+                CHECK(!strcmp(align_of(d, "b", &given), "start") && !given, "align: as 0.6.0 wrote it, an explicit start is the default");
+                CHECK(!strcmp(align_of(d, "c", &given), "center") && given, "align: as 0.6.0 wrote it, center is given");
+                CHECK(yexp_canonical(d, &a, &stored, &sn, NULL) == YEXP_OK && stored && !strstr(stored, "\"align\": \"start\"") &&
+                      strstr(stored, "\"align\": \"center\"") && strstr(stored, "\"align\": \"end\""),
+                      "align: 0.6.0's canonical bytes leave start out and keep center");
+            }
+            if (stored) {
+                /* 0.6.0's stored bytes, read back as 0.6.0 wrote them: the same
+                 * bytes and form; read with this header's defaults, a is centered */
+                for (k = 0; k < sizeof old_writers / sizeof old_writers[0]; k++) {
+                    yjs_arena b;
+                    yexp_def* d2 = NULL;
+                    const char* again = NULL;
+                    size_t an = 0;
+                    yjs_arena_init_heap(&b, 0);
+                    rc = yexp_load_written(&b, stored, sn, NULL, old_writers[k], &d2, &r);
+                    CHECK2(rc == YEXP_OK && !strcmp(align_of(d2, "a", NULL), "start") && !strcmp(align_of(d2, "b", NULL), "start") &&
+                           !strcmp(align_of(d2, "c", NULL), "center"),
+                           "align: an older or unreadable writer's version gives start for a text with no align", old_writers[k] ? old_writers[k] : "NULL");
+                    CHECK2(rc == YEXP_OK && yexp_canonical(d2, &b, &again, &an, NULL) == YEXP_OK && an == sn && !memcmp(again, stored, sn),
+                           "align: 0.6.0's bytes give themselves back", old_writers[k] ? old_writers[k] : "NULL");
+                    if (ver == 1 && rc == YEXP_OK) {
+                        CHECK(yexp_migrated(d2, &b, &again, &an, NULL) == YEXP_OK && again && !strstr(again, "\"align\": \"start\"") &&
+                              strstr(again, "\"align\": \"center\""), "align: the migrated bytes keep the writer's defaults");
+                    }
+                    yjs_arena_free(&b);
+                }
+                for (k = 0; k < sizeof new_writers / sizeof new_writers[0]; k++) {
+                    yjs_arena b;
+                    yexp_def* d2 = NULL;
+                    yjs_arena_init_heap(&b, 0);
+                    rc = yexp_load_written(&b, stored, sn, NULL, new_writers[k], &d2, &r);
+                    CHECK2(rc == YEXP_OK && !strcmp(align_of(d2, "a", NULL), "center") && !strcmp(align_of(d2, "b", NULL), "center") &&
+                           !strcmp(align_of(d2, "c", NULL), "center"),
+                           "align: this header's version or a later one gives center", new_writers[k]);
+                    yjs_arena_free(&b);
+                }
+            }
+            yjs_arena_free(&a);
+        }
+    }
+    /* the table: one source of the default */
+    {
+        int i, n = 0, ver2, found = 0;
+        for (ver2 = 1; ver2 <= 2; ver2++) {
+            const yexp_row* rows = yexp_defaults(ver2, &n);
+            for (i = 0; rows && i < n; i++)
+                if (rows[i].section == YEXP_S_STIM && !strcmp(rows[i].key, "align")) {
+                    found++;
+                    CHECK2(rows[i].kinds == (1u << YEXP_TEXT) && rows[i].def && !strcmp(rows[i].def, "\"center\""), "align: the row's default is center",
+                           rows[i].def);
+                }
+        }
+        CHECK(found == 2, "align: one row in each version's table");
+    }
+}
+
 int main(void) {
     const char* env = getenv("YEXP_CORPUS");
     if (env) g_corpus = env;
@@ -1926,6 +2039,7 @@ int main(void) {
     run_review();
     run_walk_box();
     run_f37();
+    run_align();
     run_f26();
     run_window();
     run_f26b();

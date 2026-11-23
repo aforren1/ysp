@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.12.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.13.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -129,6 +129,21 @@
  *   macOS POSIX_SPAWN_CLOEXEC_DEFAULT), the pipe close-on-exec, the
  *   default signal actions, and SCHED_OTHER.
  *
+ *   v0.13.0 (2026-11-23): an experiment's text that leaves `align` out is
+ *   laid out centered in its width box (ysp/experiment.h 0.7.0; format
+ *   2.11), and its block key says "center". ypt_derive_texts() takes a
+ *   text's defaults (align, dir, lang, width, line_height) from
+ *   ysp/experiment.h's table of the definition's version, so the tool, the
+ *   player and the designer read one list. A listed block of a GLYPHRUNS
+ *   resource (the pack source description) keeps "start" as its default:
+ *   that format did not change. A definition that writes "start" now keeps
+ *   the key in its canonical bytes, so its experiment ID changes; one that
+ *   wrote "center" loses it. Packs with an experiment text whose align was
+ *   left out get new glyph runs and a new pack ID; other entries are
+ *   byte-identical to v0.12.0's. An old pack still plays as built: the
+ *   experiment entry's derivation names the ysp/experiment.h that wrote it,
+ *   and the player (0.19.0) loads it with that version's defaults.
+ *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":
  *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
@@ -191,7 +206,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.12.0"
+#define YPT_VERSION_STRING "0.13.0"
 
 /* A build that ypt_options.cancel stopped (beside ysp/pack.h's YPAK_ERR_*). */
 #define YPT_ERR_CANCELED (-20)

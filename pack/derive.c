@@ -16,9 +16,9 @@
  * its map has a key for every level its "by" can take, in each leaf that
  * reaches it. That check is exact, not wide: a missing key is an error.
  *
- * Needs ysp/json.h and ysp/table.h (their implementations come from
- * pack/pack_impl.c, or from the test or fuzz target that includes this
- * file). No layout here, so the core tool derives too and can name what
+ * Needs ysp/json.h, ysp/table.h and ysp/experiment.h, whose table gives a
+ * text's defaults (their implementations come from pack/pack_impl.c, or
+ * from the test or fuzz target that includes this file). No layout here, so the core tool derives too and can name what
  * it would need the layout library for. */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -27,6 +27,7 @@
 #include "ysp/pack.h"
 #include "ysp/json.h"
 #include "ysp/table.h"
+#include "ysp/experiment.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -62,6 +63,7 @@ typedef struct ypt__d {
     ytb_table*       tvt[256];   /* each table's view, opened at its first use */
     const yjs_value* vars[256];  const char* vars_node[256];  int nvars;
     long             steps;
+    int              version;    /* the definition's format version */
     char*            err;
     size_t           cap;
 } ypt__d;
@@ -237,6 +239,18 @@ static int resolve(ypt__d* d, const ypt__stim* s, const yjs_value* v, int depth)
                  "is none of them", s->name);
 }
 
+/* A text stimulus key's default as canonical JSON, from ysp/experiment.h's
+ * table of the definition's version: the format's one list of defaults
+ * (D2), which the player and the designer read too, so a default that the
+ * format changes (0.7.0: `align`) needs no change here. NULL: no default. */
+static const char* text_default(const ypt__d* d, const char* key) {
+    int i, n = 0;
+    const yexp_row* rows = yexp_defaults(d->version, &n);
+    for (i = 0; rows && i < n; i++)
+        if (rows[i].section == YEXP_S_STIM && (rows[i].kinds & (1u << YEXP_TEXT)) && !strcmp(rows[i].key, key)) return rows[i].def;
+    return NULL;
+}
+
 /* A layout key: a JSON number, as a double and in yjs_format_double()'s
  * spelling, which ypak_runs_key() puts in the key. */
 static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char* key, double lo, int lo_open, double* val,
@@ -245,7 +259,16 @@ static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char
     char buf[64];
     size_t n;
     double x;
-    if (!v) { *val = 0; *out = "0"; return 0; }
+    if (!v) {
+        /* the default, read as a value of the file would be */
+        const char* def = text_default(d, key);
+        yjs_value* dv = NULL;
+        yjs_error je;
+        memset(&je, 0, sizeof je);
+        if (!def || yjs_parse(&d->m->a, def, strlen(def), NULL, &dv, &je) != YJS_OK || dv->type != YJS_NUMBER)
+            return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': ysp/experiment.h %s has no number default for '%s'", s->name, yexp_version(), key);
+        v = dv;
+    }
     if (v->type != YJS_NUMBER)
         return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': '%s' must be a number: glyph runs are laid out at pack build (D14), so a text's font, "
                      "size, width, line_height, align, dir and lang are literal values", s->name, key);
@@ -262,7 +285,16 @@ static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char
 static int word_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char* key, const char* const* allowed, const char** out) {
     const yjs_value* v = yjs_get(o, key);
     int i;
-    if (!v) { *out = allowed ? allowed[0] : ""; return 0; }
+    if (!v) {
+        /* the default, read as a value of the file would be */
+        const char* def = text_default(d, key);
+        yjs_value* dv = NULL;
+        yjs_error je;
+        memset(&je, 0, sizeof je);
+        if (!def || yjs_parse(&d->m->a, def, strlen(def), NULL, &dv, &je) != YJS_OK || dv->type != YJS_STRING)
+            return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': ysp/experiment.h %s has no string default for '%s'", s->name, yexp_version(), key);
+        v = dv;
+    }
     if (v->type != YJS_STRING)
         return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': '%s' must be a string: glyph runs are laid out at pack build (D14), so a text's font, "
                      "size, width, line_height, align, dir and lang are literal values", s->name, key);
@@ -420,6 +452,7 @@ int ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, y
     }
     out->definition = 1;
     d.root = root;
+    d.version = (int)ver->i;
     stimuli = yjs_get(root, "stimuli");
     for (i = 0; rc == 0 && stimuli && stimuli->type == YJS_OBJECT && i < (int)stimuli->n; i++) {
         const yjs_member* s = &stimuli->u.members[i];

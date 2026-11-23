@@ -577,6 +577,13 @@ static void test_writes(void) {
     f = dsg_schema_field(o.section, o.kind_bit, "ax");
     dsg_schema_value_text(f, NULL, buf, sizeof buf);
     CHECK(f && strcmp(buf, "0.5") == 0, "an absent number shows its default ('%s')", buf);
+    /* ysp/experiment.h 0.7.0: a text with no align shows center */
+    dsg_schema_object(dsg_doc_root(d), "/stimuli/t", &o);
+    f = dsg_schema_field(o.section, o.kind_bit, "align");
+    buf[0] = 0;
+    if (f) dsg_schema_value_text(f, NULL, buf, sizeof buf);
+    CHECK(f && strcmp(buf, "center") == 0 && f->def && strcmp(f->def, "\"center\"") == 0, "a text's absent align shows center ('%s')", buf);
+    dsg_schema_object(dsg_doc_root(d), "/stimuli/g", &o);
     f = dsg_schema_field(o.section, o.kind_bit, "ori");
     CHECK(f && !dsg_schema_fits(f, dsg_path_get(dsg_doc_root(d), "/stimuli/g/ori")), "a variable does not fit a number widget");
     f = dsg_schema_field(o.section, o.kind_bit, "x");
