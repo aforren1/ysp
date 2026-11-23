@@ -373,6 +373,23 @@ void controls(const dsg_preview_info& in, dsg_preview_settings& ps) {
         apply(ps);
     }
     ImGui::SetItemTooltip("Show the settings, the outputs and the data set below the display; off, the display takes their room");
+    // The preview in a window of its own (2026-11-23): where ImGui's
+    // multi-viewport works (native SDL3 on X11, Windows, macOS).
+    ImGui::SameLine();
+    const bool popped = ui_preview_popped();
+    ImGui::BeginDisabled(!popped && !ui_preview_can_pop());
+    if (ImGui::Button(popped ? "Pop in" : "Pop out")) ui_preview_pop(!popped);
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(popped                 ? "Put the preview back in the pane"
+                          : ui_preview_can_pop() ? "Show the preview in a window of its own, which can go full screen"
+                                                 : "This platform gives no window of its own here (Wayland, a browser)");
+    if (popped) {
+        ImGui::SameLine();
+        const bool fs = ui_preview_fullscreen();
+        if (ImGui::Button(fs ? "Leave full screen" : "Full screen") && !ui_preview_set_fullscreen(!fs))
+            ui_set_status("The preview's window did not go %s.", fs ? "back from full screen" : "full screen");
+        ImGui::SetItemTooltip(fs ? "Back to a window (Esc, when the session does not have the keys)" : "Fill the monitor that the window is on");
+    }
 }
 
 // --- the display ------------------------------------------------------------------

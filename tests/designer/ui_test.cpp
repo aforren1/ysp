@@ -623,7 +623,8 @@ int main(int argc, char** argv) {
           "the part's JSON: %.*s", (int)pn, part ? part : "");
     // the AUX pane's width (2026-11-23): its own part, the default share
     part = dsg_view_part_get(&v, "aux", &pn);
-    CHECK(part && pn == 14 && memcmp(part, "{\"width\":0.45}", 14) == 0, "the part aux: %.*s", (int)pn, part ? part : "");
+    static const char aux_def[] = "{\"popped\":false,\"width\":0.45}";   // 2026-11-23: in the pane
+    CHECK(part && pn == sizeof aux_def - 1 && memcmp(part, aux_def, pn) == 0, "the part aux: %.*s", (int)pn, part ? part : "");
     // a zoom round-trips; it is written as "zoom" with its value
     {
         dsg_view zv;

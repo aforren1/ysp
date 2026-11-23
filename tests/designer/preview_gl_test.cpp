@@ -18,6 +18,11 @@
 //      1000 px wide at the display's center, and its lines start at the
 //      box's left edge (align "start"), so the word's left edge is at
 //      W / 2 - 500 and its middle at H / 2.
+//   2c. Popped out (2026-11-23): ImGui's multi-viewport on a platform of
+//      this test's (each OS window a pbuffer with a context that shares
+//      the first's), the preview in a window of its own at 1:1: that
+//      context's framebuffer is the texture's bytes, through main.cpp's
+//      fence (gl_viewports.h).
 //   4. Restart, the same seed: stepped to the same frame with no ImGui
 //      frame drawn between the steps, gfx gives the same bytes.
 //   Skips (exit 77) with no EGL, no device whose GL_RENDERER has
@@ -30,7 +35,10 @@
 //   clock of 60 Hz paces the session; the frames run back to back. Each
 //   line: median, p99 and max in microseconds of FRAMES frames once the
 //   session runs; the adoption's frames apart. "hidden": the pane hidden,
-//   so no session; the views' cost without the pane.
+//   so no session; the views' cost without the pane. "popout": the preview
+//   popped out into a 1920 x 1080 window of its own (a second context and
+//   pbuffer), the main window without the pane; render then includes that
+//   window's draw and its glFinish().
 #include "ui.h"
 #include "views.h"
 #include "skt.h"
@@ -42,6 +50,7 @@
 #include "imgui_internal.h"
 #include "imgui_impl_opengl3.h"
 #include <GLES3/gl3.h>
+#include "gl_viewports.h"
 
 #include <dlfcn.h>
 #include <float.h>
@@ -85,6 +94,14 @@ static const int64_t FR = 16666667;   // a 60 Hz UI frame
 typedef dsg_gl_fn (*gpa_fn)(const char*);
 static gpa_fn g_gpa;
 static char g_renderer[200];
+// What the viewports' platform needs: the display, the config, the first
+// context and its pbuffer, and EGL's calls.
+static void *g_dpy, *g_cfg, *g_ctx, *g_pb;
+static void* (*g_mkctx)(void*, void*, void*, const int32_t*);
+static void* (*g_mkpb)(void*, void*, const int32_t*);
+static unsigned (*g_cur)(void*, void*, void*, void*);
+static unsigned (*g_destroy_surface)(void*, void*);
+static unsigned (*g_destroy_ctx)(void*, void*);
 
 static dsg_gl_fn gl_proc(void*, const char* name) { return g_gpa(name); }
 
@@ -125,6 +142,8 @@ static const char* egl_open(const char* want) {
     load(&mkctx, lib, "eglCreateContext");
     load(&mkpb, lib, "eglCreatePbufferSurface");
     load(&cur, lib, "eglMakeCurrent");
+    load(&g_destroy_surface, lib, "eglDestroySurface");
+    load(&g_destroy_ctx, lib, "eglDestroyContext");
     void* devs[16];
     int32_t nd = 0;
     if (!query_devices || !gpd || !init || !bind_api || !choose || !mkctx || !mkpb || !cur || !query_devices(16, devs, &nd))
@@ -145,10 +164,91 @@ static const char* egl_open(const char* want) {
         if (!pb || !cur(dpy, pb, pb, ctx)) continue;
         const char* r = (const char*)glGetString(GL_RENDERER);
         snprintf(g_renderer, sizeof g_renderer, "%s", r ? r : "?");
-        if (!want || !want[0] || strstr(g_renderer, want)) return nullptr;
+        if (!want || !want[0] || strstr(g_renderer, want)) {
+            g_dpy = dpy, g_cfg = cfg, g_ctx = ctx, g_pb = pb;
+            g_mkctx = mkctx, g_mkpb = mkpb, g_cur = cur;
+            return nullptr;
+        }
         cur(dpy, nullptr, nullptr, nullptr);
     }
     return "no EGL device with that renderer";
+}
+
+// --- the viewports' platform: an OS window is a pbuffer and a shared context --------
+
+struct PbWindow {
+    void* pb = nullptr;
+    void* ctx = nullptr;
+    ImVec2 pos, size;
+    bool minimized = false;
+};
+static PbWindow g_main_window;
+static int g_pb_windows;
+static const int kPbW = 2560, kPbH = 1600;   // the largest window a test makes
+
+static PbWindow* pbw(ImGuiViewport* vp) { return (PbWindow*)vp->PlatformUserData; }
+static void pb_create(ImGuiViewport* vp) {
+    PbWindow* w = IM_NEW(PbWindow)();
+    const int32_t xa[] = { 0x3098, 3, 0x30FB, 0, 0x3038 };
+    const int32_t pa[] = { 0x3057, kPbW, 0x3056, kPbH, 0x3038 };
+    // shares the first context's objects, as SDL_GL_SHARE_WITH_CURRENT_CONTEXT
+    w->ctx = g_mkctx(g_dpy, g_cfg, g_ctx, xa);
+    w->pb = w->ctx ? g_mkpb(g_dpy, g_cfg, pa) : nullptr;
+    w->pos = vp->Pos;
+    w->size = vp->Size;
+    vp->PlatformUserData = vp->PlatformHandle = w;
+    g_pb_windows++;
+}
+static void pb_destroy(ImGuiViewport* vp) {
+    PbWindow* w = pbw(vp);
+    if (w && w != &g_main_window) {
+        g_cur(g_dpy, g_pb, g_pb, g_ctx);
+        if (w->pb) g_destroy_surface(g_dpy, w->pb);
+        if (w->ctx) g_destroy_ctx(g_dpy, w->ctx);
+        IM_DELETE(w);
+    }
+    vp->PlatformUserData = vp->PlatformHandle = nullptr;
+}
+static void pb_show(ImGuiViewport*) {}
+static void pb_set_pos(ImGuiViewport* vp, ImVec2 p) { pbw(vp)->pos = p; }
+static ImVec2 pb_get_pos(ImGuiViewport* vp) { return pbw(vp)->pos; }
+static void pb_set_size(ImGuiViewport* vp, ImVec2 s) { pbw(vp)->size = s; }
+static ImVec2 pb_get_size(ImGuiViewport* vp) { return pbw(vp)->size; }
+static bool pb_get_minimized(ImGuiViewport* vp) { return pbw(vp)->minimized; }
+static void pb_set_title(ImGuiViewport*, const char*) {}
+// as SDL3's backend: the window's context current before the renderer draws
+static void pb_render(ImGuiViewport* vp, void*) {
+    PbWindow* w = pbw(vp);
+    if (w && w->ctx) g_cur(g_dpy, w->pb, w->pb, w->ctx);
+}
+// what a swap waits for, less the vsync
+static void pb_swap(ImGuiViewport*, void*) { glFinish(); }
+
+static void pb_install() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    pio.Platform_CreateWindow = pb_create;
+    pio.Platform_DestroyWindow = pb_destroy;
+    pio.Platform_ShowWindow = pb_show;
+    pio.Platform_SetWindowPos = pb_set_pos;
+    pio.Platform_GetWindowPos = pb_get_pos;
+    pio.Platform_SetWindowSize = pb_set_size;
+    pio.Platform_GetWindowSize = pb_get_size;
+    pio.Platform_GetWindowMinimized = pb_get_minimized;
+    pio.Platform_SetWindowTitle = pb_set_title;
+    pio.Platform_RenderWindow = pb_render;
+    pio.Platform_SwapBuffers = pb_swap;
+    ImGuiPlatformMonitor m;
+    m.MainPos = m.WorkPos = ImVec2(0, 0);
+    m.MainSize = m.WorkSize = ImVec2(7680, 2160);
+    pio.Monitors.push_back(m);
+    g_main_window.pb = g_pb;
+    g_main_window.ctx = g_ctx;
+    g_main_window.size = ImVec2((float)FBW, (float)FBH);
+    ImGuiViewport* mv = ImGui::GetMainViewport();
+    mv->PlatformUserData = mv->PlatformHandle = &g_main_window;
 }
 
 // --- the UI, as main.cpp runs it ----------------------------------------------------
@@ -214,6 +314,14 @@ static void frame(bool wait, bool render) {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
+    // the other viewports, as main.cpp draws them
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        if (render) glvp::begin();
+        ImGui::UpdatePlatformWindows();
+        if (render) ImGui::RenderPlatformWindowsDefault();
+        g_cur(g_dpy, g_pb, g_pb, g_ctx);
+        glvp::end();
+    }
     const double t2 = us();
     glFinish();   // what a swap waits for, less the vsync
     const double t3 = us();
@@ -239,10 +347,13 @@ static int ui_start(char* err, size_t cap) {
     io.IniFilename = nullptr;
     io.ConfigInputTextCursorBlink = false;
     ImGui::StyleColorsDark();
+    io.DisplaySize = ImVec2((float)FBW, (float)FBH);
+    pb_install();
     if (!ImGui_ImplOpenGL3_Init("#version 300 es")) {
         snprintf(err, cap, "ImGui's OpenGL3 backend did not start");
         return -1;
     }
+    glvp::install();
     UiPlatform plat = {};
     plat.now_ns = now_ns;
     plat.gl_caps = &g_caps;
@@ -254,6 +365,7 @@ static int ui_start(char* err, size_t cap) {
 static void ui_stop() {
     ui_shutdown();
     ygfx_close(&g_first);
+    ImGui::DestroyPlatformWindows();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui::DestroyContext();
 }
@@ -549,6 +661,47 @@ static int run_test(const char* work) {
         frame(true, true);
     }
 
+    // 2c. popped out: the second context's framebuffer is the texture
+    {
+        CHECK(ui_preview_can_pop(), "the viewports' platform: Pop out offered");
+        ui_preview_pop(true);
+        frame(true, true);
+        frame(true, true);
+        ImGuiWindow* pw = ImGui::FindWindowByName("Preview##window");
+        CHECK(pw && pw->Active && pw->Viewport != ImGui::GetMainViewport() && pbw(pw->Viewport) && pbw(pw->Viewport)->ctx,
+              "popped: a window of its own, on a context of its own (%d made)", g_pb_windows);
+        ImGuiWindow* pd = nullptr;
+        for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+            if (pw && w->ParentWindow == pw && strstr(w->Name, "##display")) pd = w;
+        ImVec2 pa(0, 0), pb2(0, 0);
+        const bool pr = pd && image_rect(pd->DrawList, (ImTextureID)tex, &pa, &pb2);
+        CHECK(pr, "popped: its display drew the texture");
+        if (pr && pw && pbw(pw->Viewport)) {
+            const ImGuiViewport* vp = pw->Viewport;
+            CHECK(pb2.x - pa.x == (float)DW && pb2.y - pa.y == (float)DH && pa.x == floorf(pa.x) && pa.y == floorf(pa.y),
+                  "popped, 1:1 at a whole px: (%.2f, %.2f) to (%.2f, %.2f)", pa.x, pa.y, pb2.x, pb2.y);
+            // the window's own framebuffer: its rows go up from its height
+            const int x0 = (int)(pa.x - vp->Pos.x), y0 = (int)(pa.y - vp->Pos.y);
+            const int vh = (int)vp->Size.y;
+            PbWindow* w = pbw(pw->Viewport);
+            g_cur(g_dpy, w->pb, w->pb, w->ctx);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            memset(fbb, 0, nb);
+            glReadPixels(x0, vh - y0 - DH, DW, DH, GL_RGBA, GL_UNSIGNED_BYTE, fbb);
+            const bool read_ok = glGetError() == GL_NO_ERROR;
+            g_cur(g_dpy, g_pb, g_pb, g_ctx);
+            CHECK(read_ok, "popped: glReadPixels() of its framebuffer");
+            size_t pd_diff = 0;
+            for (size_t i = 0; i < nb; i++) pd_diff += t1[i] != fbb[i];
+            CHECK(pd_diff == 0, "popped: its framebuffer is the texture's bytes: %zu bytes differ", pd_diff);
+        }
+        ui_preview_pop(false);
+        frame(true, true);
+        frame(true, true);
+        CHECK(!ui_preview_popped() && ImGui::GetPlatformIO().Viewports.Size == 1, "popped in: one viewport again (%d)",
+              ImGui::GetPlatformIO().Viewports.Size);
+    }
+
     // 3. the word at its place, in its row's ink
     {
         const unsigned char* bg = t1;   // a corner: the background
@@ -629,7 +782,7 @@ static void loadavg(const char* when) {
     printf("load average %s: %s", when, b[0] ? b : "?\n");
 }
 
-static int run_bench(const char* project, int hz, int n, bool hidden, int dw, int dh) {
+static int run_bench(const char* project, int hz, int n, bool hidden, int dw, int dh, bool popout) {
     FBW = 1920;
     FBH = 1080;
     const char* want = getenv("YSP_GL_DEVICE");
@@ -684,6 +837,23 @@ static int run_bench(const char* project, int hz, int n, bool hidden, int dw, in
         printf("FAIL: no running session after %d frames (status %d)\n", i, info().status);
         return 1;
     }
+    if (popout) {
+        // a window of its own, 1920 x 1080 beside the main one: a second
+        // monitor's worth, as the user would make it full screen
+        ui_preview_pop(true);
+        frame(false, true);
+        ImGui::SetWindowPos("Preview##window", ImVec2(1920, 0));
+        ImGui::SetWindowSize("Preview##window", ImVec2(1920, 1080));
+        frame(false, true);
+        frame(false, true);
+        ImGuiWindow* pw = ImGui::FindWindowByName("Preview##window");
+        if (!pw || pw->Viewport == ImGui::GetMainViewport() || ImGui::GetPlatformIO().Viewports.Size != 2) {
+            printf("FAIL: the preview did not pop out\n");
+            return 1;
+        }
+        printf("  popped out: %.0f x %.0f at (%.0f, %.0f), %d viewports\n", pw->Size.x, pw->Size.y, pw->Pos.x, pw->Pos.y,
+               ImGui::GetPlatformIO().Viewports.Size);
+    }
     for (int k = 0; k < n_adopt; k++)
         printf("  adoption frame %d: tick %.1f (attach %.1f), ui_frame %.1f, render %.1f, finish %.1f, total %.1f us\n", k + 1, adopt[k].tick,
                adopt[k].attach, adopt[k].ui, adopt[k].render, adopt[k].finish, adopt[k].total);
@@ -721,12 +891,13 @@ int main(int argc, char** argv) {
     if (argc >= 5 && strcmp(argv[1], "--bench") == 0) {
         int dw = 0, dh = 0;
         const bool hidden = argc > 5 && strcmp(argv[5], "hidden") == 0;
-        if (argc > 5 && !hidden && sscanf(argv[5], "%dx%d", &dw, &dh) != 2) dw = dh = 0;
-        return run_bench(argv[2], atoi(argv[3]), atoi(argv[4]), hidden, dw, dh);
+        const bool popout = argc > 5 && strcmp(argv[5], "popout") == 0;
+        if (argc > 5 && !hidden && !popout && sscanf(argv[5], "%dx%d", &dw, &dh) != 2) dw = dh = 0;
+        return run_bench(argv[2], atoi(argv[3]), atoi(argv[4]), hidden, dw, dh, popout);
     }
     if (argc < 2) {
         printf("usage: test_designer_preview_gl WORK\n"
-               "       test_designer_preview_gl --bench PROJECT HZ FRAMES [hidden | WxH]\n");
+               "       test_designer_preview_gl --bench PROJECT HZ FRAMES [hidden | popout | WxH]\n");
         return 2;
     }
     return run_test(argv[1]);

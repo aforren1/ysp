@@ -9,8 +9,12 @@
 Two sets, each from a GitHub tarball at a full commit SHA, each file compared
 byte for byte with the SHA-256 value here; nothing else is accepted:
 
-    third_party/imgui/           Dear ImGui v1.93.0 (MIT): the designer's UI,
-                                 and its SDL3 and OpenGL 3 / GL ES 3 backends
+    third_party/imgui/           Dear ImGui v1.93.0, the docking branch (tag
+                                 v1.93.0-docking; MIT): the designer's UI,
+                                 and its SDL3 and OpenGL 3 / GL ES 3 backends,
+                                 with multi-viewport support (the preview's
+                                 window of its own, docs/designer.md,
+                                 "Preview size")
     third_party/skribidi-extra/  Skribidi's rasterizer, image atlas, canvas
                                  and layout cache (MIT), from the commit that
                                  tools/vendor_layout.py pins: the designer
@@ -19,15 +23,18 @@ byte for byte with the SHA-256 value here; nothing else is accepted:
                                  leaves them out
 
 The designer (CMake option YSP_BUILD_DESIGNER) needs them for its window and
-its UI test; its core and core test do not. The pins are the ones the UI
-spike measured (docs/designer_ui_probe.md).
+its UI test; its core and core test do not. The UI spike measured ImGui's
+v1.93.0 on master (docs/designer_ui_probe.md); the docking branch at the
+same release replaced it on 2026-11-23.
 
 One more set only with --test-engine, for the optional test layer (CMake
 option YSP_DESIGNER_TEST_ENGINE, docs/designer.md, "UI tests with the Test
 Engine"); nothing else needs it:
 
     third_party/imgui_test_engine/  Dear ImGui Test Engine, tag v1.93.0 (the
-                                 tag for ImGui v1.93.0), under the Dear ImGui
+                                 tag for ImGui v1.93.0, master and docking
+                                 alike: the engine has no docking tag of its
+                                 own), under the Dear ImGui
                                  Test Engine License v1.04, not MIT: read
                                  its LICENSE.txt before you fetch it
 
@@ -47,23 +54,23 @@ SETS = [
     {
         "dest": "imgui",
         "repo": "ocornut/imgui",
-        "commit": "c1aaac65e896a45f81f47a4d68f9959e0f86c859",   # tag v1.93.0
+        "commit": "b916186e66aa3c02b72c6ca17455516512ed8049",   # tag v1.93.0-docking
         "files": {
-            "imgui.cpp": "9542082a1eaeffcab7b3d8069e707839ce1714d167005e9f273ac9f656b415ed",
-            "imgui.h": "314462301948fbd5673f5ead6f9a53acf54767cbee57e186e69f8f8b022c7094",
-            "imgui_internal.h": "61bc50172d907cc931159cdce48fbff1db616cda33251c9c3469e316056939e6",
-            "imgui_draw.cpp": "fff3bb04ca11e32041144e83a37b89ec92f4d5c62d681eb7ef29ee6cd7663e84",
+            "imgui.cpp": "07b69e8e6b3276d41308147e302e24e8655af00285a87a0c79aad2ba4d4c1a8e",
+            "imgui.h": "97f3078cf88f63bb4a5797b590e5d2891158a0748356d77a3fff1834656eec69",
+            "imgui_internal.h": "cf364a74566c807a878c2866d3f16780c18b8151ca3cf8f82a8cd955bd2933c2",
+            "imgui_draw.cpp": "9d65a8f6e53adc2baa89eb6ea285601a0c0294bd0e624ddb4926f05dd0a55f3f",
             "imgui_tables.cpp": "36635c1cf2ad1b7c88cdced456cceba3a1d02266d78a63d77e9cce92f4d48d61",
-            "imgui_widgets.cpp": "d2d388f711688f6a5ce1ae3b30168c1bf4f954ead40235b0b2b9667452850c93",
+            "imgui_widgets.cpp": "786ffd1cb4f1a0519194eac53d66d84a42a07b2094efa66e404dfb6cd2dd0065",
             "imconfig.h": "fa91f606da783669ffd485f3f9e0cd0d92cddeac459efce4c2b9327cce7a3233",
             "imstb_rectpack.h": "889b396795202d1457560a797a7242e96f6f132d4b88ca2d69be58bf05e1771f",
             "imstb_textedit.h": "a985f5fa0ed97353d493b497961e9eef52082edcd045cf6954b69990ec9d0741",
             "imstb_truetype.h": "c51a0f7e7ea760f2366bd3752635ec58e21fccfec4a832501639990ba6ce0528",
             "LICENSE.txt": "173506a2d6f7fb67990d257fb2507f188690eca39060c39469ae7bef43aae2a3",
-            "backends/imgui_impl_sdl3.cpp": "306060dffa276b574f0541194e8e079c1685c29c1095602a3972de0bb23171e7",
-            "backends/imgui_impl_sdl3.h": "fa184f17d59d31e986df2e827ef964d7b3c28bcba7789643a4aaaed344cb868e",
-            "backends/imgui_impl_opengl3.cpp": "3d8c324f414517c2393e1f34009933bf9ca0e0eee4d04f9db57257df5f1d9d2b",
-            "backends/imgui_impl_opengl3.h": "ff9510fb5d13f4c13b8ae4b980777c9a01d65d60c3a5449b0f1f92c635c5469b",
+            "backends/imgui_impl_sdl3.cpp": "c51764f6a87e795c3844be254739c6b80f5345299972209c0a1578cf7068631d",
+            "backends/imgui_impl_sdl3.h": "a7716305e9312d32d7ffb7806555d3ba518c6df6dbf26077d5f6a6e022c6efe5",
+            "backends/imgui_impl_opengl3.cpp": "edd273c67a72b218b884e4739c5c6786c6a581b02a48a7345cd2838e9382a18a",
+            "backends/imgui_impl_opengl3.h": "2adaa26c1eef1372c28c2d7f54c14781e9affa872e43b3c4631a61eacc8e3e57",
             "backends/imgui_impl_opengl3_loader.h": "e83374501bb912b5216a1b191c620a78a4ff0824af1664061fc42c5d76cc9367",
         },
     },

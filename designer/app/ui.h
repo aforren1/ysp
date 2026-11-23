@@ -45,6 +45,11 @@ struct UiPlatform {
     // draws when ui_run_wait_ms() says, at most DSG_RUN_REDRAW_HZ frames a
     // second. NULL: none (the tests call ui_run_wait_ms() themselves).
     void (*wake_run)(void* ctx);
+    // Preview size (2026-11-23): puts the OS window whose ImGui platform
+    // handle is `window` (ImGuiViewport::PlatformHandle; SDL3's backend
+    // keeps the SDL_WindowID there) full screen or back; false when it
+    // cannot. NULL: the popped-out preview offers no full screen.
+    bool (*fullscreen)(void* ctx, void* window, bool on);
 };
 
 bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t cap);
@@ -74,8 +79,8 @@ bool ui_animating();
 bool ui_preview_key(int scancode, bool down, bool repeat);
 // The preview has the keyboard: main.cpp keeps text input from ImGui too.
 bool ui_preview_has_keyboard();
-// The window is shown (not minimized or hidden); while false the preview
-// pauses.
+// The main window is shown (not minimized or hidden); while false the
+// preview pauses, unless it is popped out: then its own window decides.
 void ui_set_window_shown(bool shown);
 
 // Step 6. A run's player may still run: started, and not yet seen to end.

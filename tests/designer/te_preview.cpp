@@ -27,6 +27,14 @@
 //   preview/details       The Details check box folds the details: the
 //                         display grows into their room, and keeps its size
 //                         while the stale banner comes and goes.
+//   preview/popout        Without viewports Pop out is disabled. With them
+//                         (--viewports, a mock platform): the preview moves
+//                         to a decorated OS window of its own and keeps
+//                         running; its display takes the click and the
+//                         keys; Full screen goes through UiPlatform; the
+//                         main window minimized does not pause it, its own
+//                         minimized does; the view file keeps it popped; the
+//                         OS close puts it back in the pane.
 //
 // These run on part A's preview.c: real sessions, loaded on the check thread
 // and stepped by ui.cpp. Part B wrote them on a test double
@@ -560,6 +568,116 @@ void test_details(ImGuiTestContext* ctx) {
     IM_CHECK_LT(s4.y, s3.y - 50.0f);
 }
 
+const char* const kPopped = "//Preview##window";
+const char* const kPoppedDisplay = "//Preview##window/##display";
+
+ImGuiWindow* popped_window() {
+    ImGuiWindow* w = ImGui::FindWindowByName("Preview##window");
+    return w && w->Active ? w : nullptr;
+}
+
+void test_popout(ImGuiTestContext* ctx) {
+    Double dbl;
+    IM_CHECK(start(ctx, "preview_popout", false));
+    if (!(ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)) {
+        // no platform windows: the button says why and does nothing
+        IM_CHECK(!ui_preview_can_pop());
+        const ImGuiTestItemInfo it = ctx->ItemInfo(te_in_child(ctx, kPane, "Pop out"));
+        IM_CHECK(it.ID != 0);
+        IM_CHECK((it.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        ui_preview_pop(true);
+        ctx->Yield(2);
+        IM_CHECK(!ui_preview_popped());
+        IM_CHECK(popped_window() == nullptr);
+        IM_CHECK(win(ctx, kPane) != nullptr && win(ctx, kPane)->Active);
+        ui_preview_pop(false);
+        return;
+    }
+    IM_CHECK(ui_preview_can_pop());
+    char dir[DSG_PATH_MAX], other[DSG_PATH_MAX];
+    snprintf(dir, sizeof dir, "%s", ui_project()->folder);
+    static const char* const files[] = { "pack.json", "experiment.json", "conditions.csv", nullptr };
+    IM_CHECK(te_copy_project("rdk", "preview_popout_other", files, other, sizeof other));
+    ctx->ItemClick(te_in_child(ctx, kPane, "Pop out"));
+    ctx->Yield(2);
+    IM_CHECK(ui_preview_popped());
+    ImGuiWindow* w = popped_window();
+    IM_CHECK(w != nullptr);
+    // its own OS window, with the OS's decorations and a task bar entry
+    IM_CHECK(w->Viewport != ImGui::GetMainViewport());
+    IM_CHECK(w->Viewport->PlatformUserData != nullptr);
+    IM_CHECK((w->Viewport->Flags & (ImGuiViewportFlags_NoDecoration | ImGuiViewportFlags_NoTaskBarIcon)) == 0);
+    IM_CHECK_GE(w->Size.x, 960.0f);
+    // the pane is gone from the main window; the session runs on
+    ImGuiWindow* pane = win(ctx, kPane);
+    IM_CHECK(pane == nullptr || !pane->Active);
+    IM_CHECK_EQ(info().status, (int)DSG_PV_RUNNING);
+    IM_CHECK(ui_animating());
+    dsg_preview_where a = {}, b = {};
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &a));
+    ctx->Yield(5);
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &b));
+    IM_CHECK_GT(b.frame, a.frame);
+    // its display takes the click and the keys
+    const ImGuiTestItemInfo disp = ctx->WindowInfo(kPoppedDisplay);
+    IM_CHECK(disp.ID != 0);
+    ctx->ItemClick(ctx->GetID("##screen", disp.ID));
+    IM_CHECK(ui_preview_has_keyboard());
+    IM_CHECK(ui_preview_key(kEscape, true, false));
+    ui_preview_key(kEscape, false, false);
+    IM_CHECK(!ui_preview_has_keyboard());
+    // the wheel zooms there too
+    ctx->MouseMoveToPos(ctx->ItemInfo(ctx->GetID("##screen", disp.ID)).RectFull.GetCenter());
+    ctx->MouseWheelY(1.0f);
+    ctx->Yield(2);
+    IM_CHECK_EQ(settings().scale, (int)DSG_PV_SCALE_ZOOM);
+    ctx->ItemClick("//Preview##window/Fit");
+    // full screen through UiPlatform.fullscreen, with the window's handle
+    bool on = false;
+    const int calls0 = te_fullscreen_calls(&on);
+    ctx->ItemClick("//Preview##window/Full screen");
+    IM_CHECK(ui_preview_fullscreen());
+    IM_CHECK_EQ(te_fullscreen_calls(&on), calls0 + 1);
+    IM_CHECK(on);
+    ctx->ItemClick("//Preview##window/Leave full screen");
+    IM_CHECK(!ui_preview_fullscreen());
+    IM_CHECK_EQ(te_fullscreen_calls(&on), calls0 + 2);
+    IM_CHECK(!on);
+    // the main window hidden does not pause it; its own window does
+    ui_set_window_shown(false);
+    ctx->Yield(2);
+    IM_CHECK(ui_animating());
+    IM_CHECK_EQ(info().status, (int)DSG_PV_RUNNING);
+    te_viewport_minimize(w->Viewport, true);
+    ctx->Yield(3);
+    IM_CHECK(!ui_animating());
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &a));
+    ctx->Yield(5);
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &b));
+    IM_CHECK_EQ(b.frame, a.frame);
+    te_viewport_minimize(w->Viewport, false);
+    ui_set_window_shown(true);
+    ctx->Yield(3);
+    IM_CHECK(ui_animating());
+    // kept: saved, another project, this one again
+    IM_CHECK(ui_save());
+    te_open(ctx, other);
+    ctx->Yield(2);
+    IM_CHECK(!ui_preview_popped());
+    IM_CHECK(popped_window() == nullptr);
+    te_open(ctx, dir);
+    ctx->Yield(3);
+    IM_CHECK(ui_preview_popped());
+    w = popped_window();
+    IM_CHECK(w != nullptr && w->Viewport != ImGui::GetMainViewport());
+    // the OS's close button puts it back in the pane
+    ctx->ViewportPlatform_CloseWindow(w->Viewport);
+    ctx->Yield(3);
+    IM_CHECK(!ui_preview_popped());
+    IM_CHECK(popped_window() == nullptr);
+    IM_CHECK(win(ctx, kPane) != nullptr && win(ctx, kPane)->Active);
+}
+
 } // namespace
 
 void te_register_preview(ImGuiTestEngine* e) {
@@ -572,4 +690,5 @@ void te_register_preview(ImGuiTestEngine* e) {
     IM_REGISTER_TEST(e, "preview", "zoom")->TestFunc = test_zoom;
     IM_REGISTER_TEST(e, "preview", "split")->TestFunc = test_split;
     IM_REGISTER_TEST(e, "preview", "details")->TestFunc = test_details;
+    IM_REGISTER_TEST(e, "preview", "popout")->TestFunc = test_popout;
 }

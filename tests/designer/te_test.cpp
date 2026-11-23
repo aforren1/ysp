@@ -3,7 +3,10 @@
 // with YSP_DESIGNER_TEST_ENGINE (docs/designer.md, "UI tests with the Test
 // Engine"); test_designer_ui stays the default suite.
 //
-// Usage: test_designer_te WORK [FILTER]
+// Usage: test_designer_te WORK [FILTER] [--viewports]
+//   --viewports: ImGui's multi-viewport on, with a mock platform that keeps
+//   each OS window's place and size in memory (2026-11-23, "Preview size"):
+//   every test runs again so, and preview/popout pops the preview out.
 //   designer/path_field  No folder dialog: the path field takes the keyboard;
 //                        typed keys and Enter open the project.
 //   designer/edit_jump   Keys typed into the Skribidi editor reach the check;
@@ -61,6 +64,68 @@ char dir[3][DSG_PATH_MAX];
 
 bool no_dialog(void*) { return false; }
 
+// --- the mock platform for --viewports ---------------------------------------------
+
+struct MockWindow {
+    ImVec2 pos, size;
+    bool focused = false, minimized = false;
+};
+MockWindow g_main_window;
+int g_mock_windows = 0;        // OS windows made since the start
+int g_fullscreen_calls = 0;
+bool g_fullscreen_on = false;
+
+MockWindow* mock(ImGuiViewport* vp) { return (MockWindow*)vp->PlatformUserData; }
+void mock_create(ImGuiViewport* vp) {
+    MockWindow* w = IM_NEW(MockWindow)();
+    w->pos = vp->Pos;
+    w->size = vp->Size;
+    vp->PlatformUserData = vp->PlatformHandle = w;
+    g_mock_windows++;
+}
+void mock_destroy(ImGuiViewport* vp) {
+    if (vp->PlatformUserData && vp->PlatformUserData != &g_main_window) IM_DELETE(mock(vp));
+    vp->PlatformUserData = vp->PlatformHandle = nullptr;
+}
+void mock_show(ImGuiViewport*) {}
+void mock_set_pos(ImGuiViewport* vp, ImVec2 p) { mock(vp)->pos = p; }
+ImVec2 mock_get_pos(ImGuiViewport* vp) { return mock(vp)->pos; }
+void mock_set_size(ImGuiViewport* vp, ImVec2 s) { mock(vp)->size = s; }
+ImVec2 mock_get_size(ImGuiViewport* vp) { return mock(vp)->size; }
+void mock_set_focus(ImGuiViewport* vp) { mock(vp)->focused = true; }
+bool mock_get_focus(ImGuiViewport* vp) { return mock(vp)->focused; }
+bool mock_get_minimized(ImGuiViewport* vp) { return mock(vp)->minimized; }
+void mock_set_title(ImGuiViewport*, const char*) {}
+bool mock_fullscreen(void*, void* window, bool on) {
+    g_fullscreen_calls++;
+    g_fullscreen_on = on;
+    return window != nullptr;
+}
+
+void mock_install(ImGuiIO& io) {
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_RendererHasViewports;
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    pio.Platform_CreateWindow = mock_create;
+    pio.Platform_DestroyWindow = mock_destroy;
+    pio.Platform_ShowWindow = mock_show;
+    pio.Platform_SetWindowPos = mock_set_pos;
+    pio.Platform_GetWindowPos = mock_get_pos;
+    pio.Platform_SetWindowSize = mock_set_size;
+    pio.Platform_GetWindowSize = mock_get_size;
+    pio.Platform_SetWindowFocus = mock_set_focus;
+    pio.Platform_GetWindowFocus = mock_get_focus;
+    pio.Platform_GetWindowMinimized = mock_get_minimized;
+    pio.Platform_SetWindowTitle = mock_set_title;
+    ImGuiPlatformMonitor m;
+    m.MainPos = m.WorkPos = ImVec2(0, 0);
+    m.MainSize = m.WorkSize = ImVec2(3840, 2160);
+    pio.Monitors.push_back(m);
+    g_main_window.size = io.DisplaySize;
+    ImGuiViewport* mv = ImGui::GetMainViewport();
+    mv->PlatformUserData = mv->PlatformHandle = &g_main_window;
+}
+
 // One frame as main.cpp draws it, with a renderer that only accepts textures.
 void frame(ImGuiTestEngine* engine) {
     ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
@@ -80,6 +145,8 @@ void frame(ImGuiTestEngine* engine) {
             t->SetStatus(ImTextureStatus_Destroyed);
         }
     }
+    // as main.cpp does with viewports: the other windows have no renderer here
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) ImGui::UpdatePlatformWindows();
     ImGuiTestEngine_PostSwap(engine);
 }
 
@@ -299,6 +366,14 @@ void te_open(ImGuiTestContext* ctx, const char* folder) {
 ImGuiID te_in_child(ImGuiTestContext* ctx, const char* window, const char* item) { return in_child(ctx, window, item); }
 bool te_modal_open() { return modal_open(); }
 
+void te_viewport_minimize(ImGuiViewport* vp, bool on) {
+    if (vp && vp->PlatformUserData) mock(vp)->minimized = on;
+}
+int te_fullscreen_calls(bool* on) {
+    *on = g_fullscreen_on;
+    return g_fullscreen_calls;
+}
+
 void te_show(ImGuiTestContext* ctx, const char* label) {
     char path[128];
     snprintf(path, sizeof path, "//##designer/switch/%s", label);
@@ -306,8 +381,16 @@ void te_show(ImGuiTestContext* ctx, const char* label) {
 }
 
 int main(int argc, char** argv) {
+    bool viewports = false;
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--viewports") == 0) {
+            viewports = true;
+            for (int k = i; k + 1 < argc; k++) argv[k] = argv[k + 1];
+            argc--;
+            break;
+        }
     if (argc < 2) {
-        printf("usage: test_designer_te WORK [FILTER]\n");
+        printf("usage: test_designer_te WORK [FILTER] [--viewports]\n");
         return 2;
     }
     const char* work = argv[1];
@@ -330,7 +413,9 @@ int main(int argc, char** argv) {
     io.DisplaySize = ImVec2(1400, 900);
     io.ConfigInputTextCursorBlink = false;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
+    if (viewports) mock_install(io);
     UiPlatform plat = { nullptr, no_dialog, nullptr, nullptr };
+    plat.fullscreen = mock_fullscreen;
     // Step 6: te_run.cpp fills the buffer before each run starts.
     plat.player_path = te_run_player();
     if (!ui_init(YSP_DESIGNER_FONT_DIR, &plat, err, sizeof err)) {
@@ -365,7 +450,7 @@ int main(int argc, char** argv) {
     te_register_run(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
-    ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);
+    ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 && argv[2][0] ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);
     while (!ImGuiTestEngine_IsTestQueueEmpty(engine)) frame(engine);
     ImGuiTestEngine_Stop(engine);
 
@@ -375,6 +460,7 @@ int main(int argc, char** argv) {
 
     ui_shutdown();
     te_run_cleanup();
+    if (viewports) ImGui::DestroyPlatformWindows();
     // ImGui's context first: the engine unbinds from it (imgui_te_engine.h).
     ImGui::DestroyContext();
     ImGuiTestEngine_DestroyContext(engine);
