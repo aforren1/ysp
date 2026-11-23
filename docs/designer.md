@@ -4043,6 +4043,172 @@ in both windows; an IME composition in a field of the popped-out window;
 tooltips and combos near the main window's edge, which now become OS
 windows of their own (ImGui's note: SDL3's window animations can show).
 
+#### Rows that wrap (2026-11-23)
+
+Branch `step6-wrap`, from `designer-step6` (`13b2c13c`). The hand test on
+X11 (2026-11-23): "I don't see controls for pop out and it seems like a
+lot gets cut off unless fullscreen". The cause: the rows of the toolbar,
+the preview's controls, the Run view and the chart's toolbar were chains
+of `ImGui::SameLine()`. ImGui does not wrap a row: it clips each item past
+the window's right edge. The preview's controls were 11 items on one row,
+and Pop out was the last.
+
+**The helper.** `designer/app/flow.h`. Before each item after the first of
+a row, `flow_next(w)` calls `SameLine()` only when the item's width `w`
+fits in what is left of the row; else the item starts the next row. The
+widths are ImGui's own: a button is its label and two `FramePadding.x`; a
+check box or a radio button is a frame height, `ItemInnerSpacing.x` and
+the label; a combo or a field is its set width, `ItemInnerSpacing.x` and
+the label; user text is its Skribidi width. A group that belongs on one
+row passes its whole width once and uses `SameLine()` inside: the toolbar's
+"Path", its field and Open path; the chart's rename row; "family" and
+"key" with their values in the Run view's roles; a label and its value.
+The preview's Fit, 1:1, the zoom readout and Pop out (and Full screen) pass
+their whole width before Fit, then `flow_next()` each: they stay on one row
+when a row can hold them.
+
+**Where it is used.** The toolbar (`ui.cpp`) and the view switch; the
+preview's controls, where rows, issue line, choice strip and details
+(`view_preview.cpp`); the Run view's controls, state line, rows of the
+profile, fields, gains, tiers, last trial and buttons (`view_run.cpp`);
+the chart's toolbar (`view_chart.cpp`); the tables' toolbar
+(`view_tables.cpp`). The property panels are table cells of fixed columns,
+and the test found nothing clipped there; they did not change.
+
+**The preview's controls, in a new order.** Run, Pause, Step, Restart,
+then Fit, 1:1, the zoom readout, Pop out (and Full screen when popped
+out), then Details, Speed and New seed. Before, it was Run, Pause, Step,
+Restart, New seed, Speed, Fit, 1:1, the readout, Details, Pop out. Why:
+- A row wraps from its end, so the end is what goes to a second row in a
+  narrow pane. The first items should be those a person uses most.
+- Run, Pause, Step and Restart are used during the session, trial by
+  trial.
+- Fit, 1:1, the zoom and Pop out set how large the display is, which the
+  hand tests asked for (small text was not readable at Fit). Pop out is
+  the way to the largest display; in the old order it was the last item,
+  and no person saw it.
+- Details, Speed and New seed are set once for a session, or seldom.
+
+In a pane of 320 points (the least) the first row has the four session
+buttons, the second Fit, 1:1, the readout and Pop out (and Details with
+the Noto fonts), the third the rest.
+
+**The fixed rows rule** (hand test of 2026-11-21) holds: the display's
+Fit size and place must not change while the session runs. A row count
+that depends on the pane's width is correct (it changes only when the
+person resizes); one that depends on text that changes during a session
+is not. So:
+- The where rows are cells of fixed width: "Trial N"; the leaf and its
+  row; "template" and its name; "state" and its name; the frame and the
+  time; then on a row of its own the last trial's outcome, its response
+  and its rt. Each cell's width comes from the widest text of its kind
+  ("Trial 00000", "frame 0000000, 00000.000 s"); a name gets a quarter of
+  the pane, 5 to 10 em. Every cell is there when it is empty, so the rows
+  are the same with no session. A name longer than its cell is clipped,
+  and the cell's tooltip gives it whole. The alternative, to lay out the
+  text as it is and reserve the height of the widest case, needs the
+  widest names of the whole definition (leaves, templates, states); not
+  taken.
+- The zoom readout has the width of "1600 %", so a wheel step does not
+  move Pop out to another row.
+- The Run view's state line has the width of a long run's line ("Stopping
+  (simulated), 00000.0 s. Trials written: 00000."), so the seconds and the
+  count do not move it.
+- The preview's scroll bar always shows, in the pane and popped out
+  (`ImGuiWindowFlags_AlwaysVerticalScrollbar`). A stale banner can make
+  the pane's content taller than the pane: the display moves down and is
+  not rescaled, by design. Before, a scroll bar then came, the rows got
+  narrower, the "Faithful" banner, the where rows or the controls took
+  another row, and Fit rescaled the display. The old code did this too:
+  the new sweep of `preview/steady_wrap` found it at 4 pane widths (366 to
+  376 points; 8 with DejaVu). A width that `flow_next()` takes as if the
+  scroll bar were there was tried first; it does not stop the banner's own
+  wrap, and with the scroll bar always shown it measured no better, so it
+  was removed.
+- Not fixed: the toolbar can get a row when Stop or Kill comes (a person's
+  Run or Stop), as its status line already can; the pane's height then
+  changes by part of a row. The Run view's "Last trial" row wraps by its
+  text; it is not above the display.
+
+**Other changes.**
+- The path field keeps at least 200 points (`kPathMinW`); below that,
+  "Path", the field and Open path start a row. It was 152 points wide at a
+  window of 800 px with Stop and Kill.
+- The chart's template combo is 220 points wide, or the main view's width
+  when that is less (about 170 at a window of 800 px).
+- Not changed: an item wider than a whole row is still clipped: a long
+  path, an issue's message, the pack ID. The flow moves an item to the
+  next row; it does not break it. The pack ID stays beside "Pack ID:" on
+  one line.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release; the
+Test Engine runs headless, `DISPLAY` and `WAYLAND_DISPLAY` unset):
+- `test_designer_te`, `wrap/rows` (new, `tests/designer/te_wrap.cpp`):
+  rdk open, the preview running, the Run view shown, the chart, then the
+  tables, as the main view. At windows of 800, 1024, 1280 and 1920 px
+  wide (900 high), each with the splitter at the default share and at
+  each bound, the test gathers every item that has an ID in the main
+  window (the toolbar), the preview's pane, the Run view, the chart's
+  toolbar (the items above the canvas) and the tables' toolbar. Each must
+  be inside its window's inner clip rect on x. Pop out must be inside the
+  pane's on both axes, and the path field at least 200 points wide. Then a
+  simulated run (fake_player) with Stop shown, at 800 and 1920 px, and on
+  Linux and macOS with Kill shown too, at 800 px: 23 layouts.
+- `wrap/popped` (new; with `--viewports`): Pop out clicked at a window of
+  800 px with the pane at its least width; the popped-out window at 960
+  and 400 points wide has every item in view, Pop in and Full screen too;
+  Pop in puts it back.
+- `preview/steady_wrap` (new): the template renamed
+  `rdk_template_with_a_long_name`, a 600 x 1200 display (Fit bound by the
+  height) and the details folded. Paused at the first trial (no last
+  trial, a frame number of 2 digits), the main window goes from 1000 to
+  1990 px wide in 10 px steps, so the pane goes from 320 points up in
+  steps of about 3, and the test keeps the display's rect at each. Then a
+  response through the choice strip, paused again (a last trial with an
+  outcome, a response and an rt, a frame number of 3 digits), and the same
+  sweep: at each width the display has the same place and size. Then a
+  typed `x` gives the stale banner, and a third sweep: at each width the
+  display has the same size and x (it moves down). The status line is set
+  to the same text before each sweep: its rows set the pane's height. The
+  sweep sets the window's width, not the splitter: a drag takes about 10
+  frames, and the engine's watchdog ends a test after 1800. The long name
+  puts the width where a flow by text would wrap inside the sweep; with
+  rdk's own names that width was below 320 points.
+- On the old code (`13b2c13c`, the new tests over it): `wrap/rows` failed
+  with 234 items out of view (235 with DejaVu), `wrap/popped` with 7, and
+  `preview/steady_wrap` with the stale banner at 4 widths (8 with DejaVu;
+  its first two sweeps passed: the old where rows never wrap). Out of
+  view, of 23 layouts: the preview's Pop out, 1:1 and Details in 21, Fit
+  in 18, Speed in 16; the chart's Rename, Set first and Delete in 17 of
+  19, Add state in 16, Preview this template in 14, Follow in 13, the
+  template combo in 12; the Run view's Copy ID in 6; the tables' Add
+  column at 800 px. No toolbar item was clipped, but the path field was
+  185 points wide at 800 px with Stop and 152 with Stop and Kill. Popped
+  out at 400 points: Fit, 1:1, Details, Pop in and Full screen.
+- With the change: `test_designer_te` 54 of 54, with and without
+  `--viewports`, with the default fonts and with CI's DejaVu fonts
+  (`-DYSP_DESIGNER_FONTS="/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf;/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"`,
+  `-DYSP_DESIGNER_TEST_FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`).
+- ctest, Release, examples on: 149 of 149 with the Test Engine on, 147 of
+  147 with it off; no compiler warning in either tree.
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on the five changed UI files and three test
+  files, and emcc (`-fsyntax-only`) on `ui.cpp`, the pane, the chart and
+  the tables: no new warning.
+
+**Hand mutants** (each reverted):
+
+| Mutant | Result |
+|---|---|
+| w-01: `flow_next()` always calls `SameLine()` | fails `wrap/rows` (277 items, both fonts) and `wrap/popped` (5; 7 with DejaVu); with DejaVu also `run/rig_combo` (a hidden item) |
+| w-02: the where rows laid out by their text, with `flow_next()` on each item's own width | fails `preview/steady_wrap`: at 4 pane widths (413, 417, 561, 565 points) the display moved down 20 points and lost 20 in height; with DejaVu at 21 widths, 320 to 609 points |
+| w-03: no least width for the path field | fails `wrap/rows` (6 layouts: 185 and 152 points) |
+| w-04: the preview's scroll bar only when its content overflows | fails `preview/steady_wrap`, the stale sweep (13 widths; 22 with DejaVu); with DejaVu also `preview/details` (123 to 111.5 points wide) |
+
+**Not done.** The window was not opened on the user's display: no person
+saw the rows wrap. The frame cost of `flow_next()` (one `CalcTextSize()`
+of a short label an item) was not measured.
+
 ## First version
 
 In:
@@ -6428,6 +6594,7 @@ ctest --test-dir build/designer -R test_designer_te
 | `undo_views` (step 4) | A structured edit through the document shows in the text. With the chart shown, the engine's Ctrl+Z takes it back and Ctrl+Shift+Z puts it in again. | `undo_keys_free()` in `ui.cpp` always false; also: `sync_editor()` does not show the document's change. |
 | `chart/*` (8), `tables/*` (5), `panels/*` (9) (step 4) | The parts' tests: "The chart", "The tables" and "The panels" give each test and its mutants. | - |
 | `preview/*` (6) (step 5), `run/*` (9) (step 6) | The parts' tests: "Part B as built" of step 5 and "Part V as built" of step 6 give each test and its mutants. | - |
+| `wrap/*` (2), `preview/steady_wrap` (2026-11-23) | Rows that wrap: every item of the toolbar, the preview, the Run view and the chart's and tables' toolbars in view at widths from 800 to 1920 px; the display's size and place hold while the where rows' text changes. "Rows that wrap (2026-11-23)" gives the mutants. | - |
 
 Each mutant of the first three tests (step 3) failed its test, and the
 other tests passed. The mutants were reverted; they are not in a mutation
