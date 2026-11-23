@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.6.0, 2026-11-20. The header's top comment is the reference for
+Status: v0.7.0, 2026-11-23. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -45,6 +45,25 @@ same form and give themselves back. `yexp_canonical()` still gives the
 version 1 bytes, so the experiment ID of a version 1 file does not change.
 D12 asks the player to record both SHA-256s. For a version 2 file the two
 calls give the same bytes.
+
+## How-to: load a pack's stored definition
+
+A pack's definition is canonical bytes that an earlier header may have
+written. A key at its default is left out of them, so they mean what
+that header's defaults say. Since v0.7.0 a text's `align` defaults to
+`center`; before, to `start` (format 2.11).
+
+1. Read the writer's version from the pack's manifest: the experiment
+   entry's derivation is `"by": "ysp/experiment.h 0.6.0"` (pack tool
+   0.8.0 and later). With no such record, use `""`.
+2. Call `yexp_load_written(&a, text, n, &host, "0.6.0", &def, &report)`.
+
+A key whose default changed after that version takes the default that
+version had, in the form and in the canonical bytes: `yexp_canonical()`
+gives the stored bytes back, so the experiment ID is the pack's. `""`,
+NULL or text that is not MAJOR.MINOR.PATCH gives the oldest defaults; this
+header's version or a later one is `yexp_load()`. The player does this
+(player.md, "Old packs and changed defaults").
 
 ## How-to: read the version 2 parts of the form
 
@@ -390,6 +409,49 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |
 
 ## Results
+
+### v0.7.0: a text's align defaults to center (2026-11-23)
+
+The user decided it on 2026-11-23 (format 2.11): a text with a `width`
+box and no `align` sat at the box's left edge (stroop's word drew about
+500 px left of the display's center), and PsychoPy and jsPsych center
+text by default. The row's default is `"center"` in both versions'
+tables; the pack tool (0.13.0) and the designer read the row, so no other
+copy of the default exists. `yexp__changed[]` holds what a changed
+default was, and up to which version; `yexp_load_written()` reads a file
+with its writer's defaults. No struct change.
+
+What changes for a file:
+
+| The file | Its meaning | Its canonical bytes and experiment ID |
+|---|---|---|
+| No `align` | centered (was: start) | the same |
+| `"align": "start"` | the same | the key is kept: a new ID |
+| `"align": "center"` | the same | the key is left out: a new ID |
+| Saved by the designer, or stored by the pack tool, with `"start"` before 0.7.0 | centered: the canonical writer left `"start"` out, and nothing can restore it | the same |
+
+Committed definitions with a text stimulus, and what each does now:
+
+| File | Texts | Placement now | Wanted |
+|---|---|---|---|
+| `tests/player/stroop/stroop.json`, `examples/pack/stroop/stroop.json`, the Stroop example of experiment_format.md 2.14 | word, banner, keys, feedback; `width` 1000, no `align` | centered (was: at the box's left edge, 500 px left of center) | yes: `trial_stroop.c` centers every text (`YLAY_ALIGN_CENTER`), and the finding was this misplacement |
+| `examples/pack/emoji/emoji.json` | face: one emoji, no `width` | unchanged: one line with no box keeps its place; the block's key and the pack change | n/a |
+| `tests/experiment/good/stroop_doc.json`, `stroop_example.json`, `kitchen_sink.json` | the loader's corpus | not drawn; the golden dumps say `center` (`kitchen_sink`'s explicit `"center"` is now the default) | n/a |
+| `tests/experiment/bad/text_*.json`, `entry_font_missing.json` | refused files | not drawn | n/a |
+| `tests/fuzz/player_corpus.py`, the designer's benches (`preview_bench.c`, `check_bench.c`) | fuzz seeds, cost benches | centered; layout cost does not depend on alignment | n/a |
+
+No committed definition meant the start placement, so none has
+`"align": "start"` added.
+
+Linux desktop (i5-14500), gcc 12.2, Release.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/experiment_test.c` | 12,688 checks pass (87 new). No `align` is `center`, not given; `"start"` and `"end"` given; the canonical bytes keep `start` and `end` and leave `center` out. As 0.6.0 wrote it (`yexp_load_written()`): no `align` is `start`, an explicit `start` is the default, `center` is given; 0.6.0's canonical bytes come back byte for byte under ten writer strings that give the oldest defaults (`"0.6.0"`, `"0.1.0"`, `""`, NULL, `"x"`, `"0.6"`, `"1000.0.0"`, `"0.6.x"`, `"0.7.x"`, `"0.7"`), and the migrated bytes keep the writer's defaults; five at or past 0.7.0 give `center`. Both tables' `align` row is `"center"`. The golden dumps of `stroop_doc`, `stroop_example` and `kitchen_sink` changed in their `align` lines only |
+| Compile checks | C11 and C++17: `yexp_load_written()` reads a text with no `align` as `start` for writer 0.6.0 |
+| Mutants | `tests/mutate/experiment.toml` a7-01 to a7-06: 6 of 6 killed (the row's default, the writer ignored, the version up to which the old default holds, a version part of four digits, a part with no digits, `yexp_load()` with the oldest defaults). The other lists' anchors still match |
+| ASan and UBSan (gcc 12, `setarch -R`) | `test_experiment`, `test_pack_derive`, the C compile check, and `derive_fuzz.c`'s replay of its 7 seeds and of 31 files (the two pack examples, the loader's good corpus, its refused text files and one scratch definition with multi-line texts): no report |
+| Full ctest (Release, the designer with the Test Engine, examples on, `DISPLAY` unset) | 148 of 148 |
 
 ### v0.6.0: the table for a designer (2026-11-20)
 

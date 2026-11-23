@@ -253,6 +253,24 @@ static void test_open_save(void) {
     free(t);
     free(disk);
     dsg_saved_free(&s);
+
+    /* a text's align (ysp/experiment.h 0.7.0): Save leaves center, the
+     * default, out and keeps start */
+    t = replaced(p.text, "\"stimuli\": {",
+                 "\"stimuli\": {\"lbl_c\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 20, \"text\": \"c\", \"align\": \"center\"},"
+                 " \"lbl_n\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 20, \"text\": \"n\"},"
+                 " \"lbl_s\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 20, \"text\": \"s\", \"align\": \"start\"},",
+                 &m);
+    CHECK(t && dsg_project_save(&p, t, m, &s, err, sizeof err) == 0 && s.canonical, "save with texts: %s", err);
+    disk = read_all(p.def_path, &n);
+    {
+        const char* at = disk ? strstr(disk, "\"align\": \"start\"") : NULL;
+        CHECK(disk && at && !strstr(at + 1, "\"align\"") && !strstr(disk, "\"align\": \"center\"") && strstr(disk, "\"lbl_n\""),
+              "Save keeps an explicit start and leaves center, the default, out");
+    }
+    free(t);
+    free(disk);
+    dsg_saved_free(&s);
     dsg_project_close(&p);
 
     /* the description as the path; a version 1 file migrated */

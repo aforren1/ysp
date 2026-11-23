@@ -4,7 +4,8 @@
 Run with one interpreter:  python3 tests/player/sim_test.py --bin DIR [--out DIR] [--keep]
 
 The packs are test_player_check's: rdk, afc2, oddball, visuomotor,
-bimanual, stroop when a font is found (--font PATH), and "sound".
+bimanual, stroop when a font is found (--font PATH), and "sound"; with
+stroop, align_packs.py's stroop_start and stroop_old.
 --keep: the data sets stay under OUT/sim (test_player_sim --keep).
 """
 import argparse
@@ -38,6 +39,15 @@ def main():
     try:
         args = check_test.build_packs(a)
         exe = compare.tool(a.bin, "test_player_sim")
+        stroop = [x.split("=", 1)[1] for x in args if x.startswith("stroop=")]
+        if stroop:
+            # the align case's packs (align_packs.py): explicit start, and
+            # the pack an older ypak built from stroop
+            r = subprocess.run([sys.executable, os.path.join(HERE, "align_packs.py"), compare.tool(a.bin, "ypak"),
+                                os.path.join(a.out, "stroop_src"), stroop[0], a.out], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise compare.Fail("align_packs.py: %s" % r.stderr)
+            args += r.stdout.split()
     except compare.Fail as e:
         print("FAILED: %s" % e, file=sys.stderr)
         return 1

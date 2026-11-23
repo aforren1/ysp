@@ -148,7 +148,7 @@ stimulus img kind=4 layer=0
   y (default) = int:0
 stimulus lbl kind=5 layer=0
   aliased (default) = int:0
-  align = "center"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5
@@ -173,7 +173,7 @@ stimulus lbl kind=5 layer=0
   y (default) = int:0
 stimulus lit kind=5 layer=0
   aliased (default) = int:0
-  align (default) = "start"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5

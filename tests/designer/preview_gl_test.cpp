@@ -12,9 +12,9 @@
 //   2. One ImGui frame later, glReadPixels() of framebuffer 0 at the
 //      image's rectangle gives the texture's bytes: alpha 255, no tint.
 //   3. The word is at its place, in its row's ink: stroop's text box is
-//      1000 px wide at the display's center, and its lines start at the
-//      box's left edge (align "start"), so the word's left edge is at
-//      W / 2 - 500 and its middle at H / 2.
+//      1000 px wide at the display's center, and a text with no align is
+//      centered in it (ysp/experiment.h 0.7.0), so the word's middle is at
+//      W / 2, H / 2.
 //   4. Restart, the same seed: stepped to the same frame with no ImGui
 //      frame drawn between the steps, gfx gives the same bytes.
 //   Skips (exit 77) with no EGL, no device whose GL_RENDERER has
@@ -499,11 +499,11 @@ static int run_test(const char* work) {
         printf("word: rows %d to %d, columns %d to %d, middle row %.1f from the top, ink %d, the strongest channel %d\n", DH - 1 - y1,
                DH - 1 - y0, x0, x1, cy, ink, top);
         CHECK(any && x1 - x0 >= 60 && y1 - y0 >= 30, "a word drawn: %d x %d px", x1 - x0 + 1, y1 - y0 + 1);
-        // The left edge: the box's, plus the first capital's side bearing
-        // (7 px for B: the seed's first word is BLUE). The middle: the capitals'
-        // middle is not the line's, 2 px off here.
-        const int left = DW / 2 - 500;
-        CHECK(x0 >= left && x0 <= left + 12, "the word starts at the box's left edge, %d px: %d px", left, x0);
+        // Centered in the box, so on the display: the ink's middle is the
+        // line's but for the side bearings (1 to 2 px). The middle row: the
+        // capitals' middle is not the line's, 2 px off here.
+        const double cx = 0.5 * (x0 + x1 + 1);
+        CHECK(fabs(cx - 0.5 * DW) <= 6, "the word is centered, column %.1f: %.1f (columns %d to %d)", 0.5 * DW, cx, x0, x1);
         CHECK(fabs(cy - 0.5 * DH) <= 12, "the word's middle is at the display's, row %.1f: %.1f", 0.5 * DH, cy);
         CHECK(ink >= 0 && top == ink, "in its row's ink: row %d, ink %d, the strongest channel %d", w.condition, ink, top);
     }

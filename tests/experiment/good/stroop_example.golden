@@ -4,7 +4,7 @@ field participant integer required=1
 role resp dir=0 family=[keyboard] required=1 min_tier=0 pulse_ns=0 kind=
 stimulus banner kind=5 layer=0
   aliased (default) = int:0
-  align (default) = "start"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5
@@ -29,7 +29,7 @@ stimulus banner kind=5 layer=0
   y = int:-30
 stimulus feedback kind=5 layer=0
   aliased (default) = int:0
-  align (default) = "start"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5
@@ -121,7 +121,7 @@ stimulus fix kind=0 layer=0
   y (default) = int:0
 stimulus keys kind=5 layer=0
   aliased (default) = int:0
-  align (default) = "start"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5
@@ -146,7 +146,7 @@ stimulus keys kind=5 layer=0
   y = int:30
 stimulus word kind=5 layer=0
   aliased (default) = int:0
-  align (default) = "start"
+  align (default) = "center"
   anchor (default) = "center"
   ax (default) = real:0.5
   ay (default) = real:0.5

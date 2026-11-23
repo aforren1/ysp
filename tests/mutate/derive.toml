@@ -1,7 +1,7 @@
 # pack/derive.c mutants: the texts the pack tool takes from an experiment
 # definition for its glyph runs (gap G9). The test compiles the mutated
-# file into itself (tests/adapt/derive_test.c), with ysp/json.h and
-# ysp/table.h. docs/pack.md lists the results.
+# file into itself (tests/adapt/derive_test.c), with ysp/json.h,
+# ysp/table.h and ysp/experiment.h. docs/pack.md lists the results.
 header = "derive.c"
 
 [test.derive]
@@ -678,3 +678,22 @@ test = "derive"
 why = "Each leaf has its own rules; a leaf without practice N makes $practice false only."
 find = "    lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;\n    if (!r) return;"
 replace = "    if (!r) return;"
+
+# --- tool v0.13.0: a text's defaults from ysp/experiment.h's table ------------------
+
+[[mutant]]
+id = "dv-01"
+name = "align's default is the tool's own start"
+test = "derive"
+why = "ysp/experiment.h 0.7.0 centers a text with no align; a block laid out at the start has a key the player does not ask for."
+find = '''        if (!def || yjs_parse(&d->m->a, def, strlen(def), NULL, &dv, &je) != YJS_OK || dv->type != YJS_STRING)'''
+replace = '''        if (allowed && !strcmp(key, "align")) { *out = allowed[0]; return 0; }
+        if (!def || yjs_parse(&d->m->a, def, strlen(def), NULL, &dv, &je) != YJS_OK || dv->type != YJS_STRING)'''
+
+[[mutant]]
+id = "dv-02"
+name = "the table's row of another kind"
+test = "derive"
+why = "A text's keys are the rows whose kinds have the text bit; another kind's row has no align."
+find = '''(rows[i].kinds & (1u << YEXP_TEXT))'''
+replace = '''(rows[i].kinds & (1u << YEXP_SHAPE))'''

@@ -21,7 +21,9 @@ names the characters no font has. Tool v0.11.0 (2026-11-18, section 18)
 stores color glyphs: a COLR font's emoji as layers in glyph runs, their
 paints in the font's curve set, in pack format 2. Tool v0.12.0
 (2026-11-22, section 19) can cancel a build and takes derived media from
-an entry cache. Where the build changed the design, the text says so. When this page and rig_spec 5
+an entry cache. Tool v0.13.0 (2026-11-23, section 20) centers an
+experiment's text that leaves `align` out, with the defaults of
+ysp/experiment.h 0.7.0. Where the build changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
 Settled before this page, in rig_spec 5, and not reopened here: one zip
@@ -616,7 +618,7 @@ Parameters: `fonts` (FONT entry names in fallback order, or
 `{"font", "face"}`; each needs a CURVESET entry made from it), `blocks`
 (`key`, `text`, `size` required; `width`, `line_height`, `color`, as
 decimal strings, default `"0"`; `dir` `auto`, `ltr` or `rtl`; `align`
-`start`, `end` or `center`; `lang`, BCP 47). Spans are not built yet.
+`start`, `end` or `center`, default `start`; `lang`, BCP 47). Spans are not built yet.
 
 #### The experiment's glyph runs (tool v0.6.0)
 
@@ -631,8 +633,12 @@ its `text` stimuli can show. Nothing in the description asks for it.
   in ysp/pack.h, which the tool and the player both call (below). Two
   stimuli of one style that show one text share one block.
 - Style: the stimulus's `font` (face 0), `size`, `width`,
-  `line_height`, `align`, `dir` and `lang`; defaults as for a listed
-  block; color 0. These are every input of a block's layout that can
+  `line_height`, `align`, `dir` and `lang`; a key left out takes its
+  default from ysp/experiment.h's table of the definition's version
+  (tool v0.13.0), which the player and the designer read too: `align`
+  `center` (ysp/experiment.h 0.7.0; a listed block's default stays
+  `start`), `dir` `auto`, `lang` `""`, `width` and `line_height` 0;
+  color 0. These are every input of a block's layout that can
   differ between blocks of one entry. Not in the key: the entry's
   fallback fonts (one list for the whole entry), color (the palette
   position, 0 in every derived block), and the draw properties (`x`,
@@ -676,7 +682,7 @@ FONT#FACE|SIZE|WIDTH|LINE_HEIGHT|ALIGN|DIR|LANG|TEXT
 | FONT | the FONT entry's name, as in the pack (writer rule, 2.7); it has no `#` and no `|` |
 | FACE | the face in decimal, no sign, no leading zeros (`0`) |
 | SIZE, WIDTH, LINE_HEIGHT | the double's shortest decimal that reads back to it, as `yjs_format_double()` writes it (json.md, Canonical numbers): `72`, `0.8`, `0.30000000000000004`; plain from 10^-18 to below 10^21, else `d.ddde+E` or `d.ddde-E`; `-0` and `0` are `0`. WIDTH and LINE_HEIGHT are `0` when the stimulus omits them |
-| ALIGN | `start`, `end` or `center` |
+| ALIGN | `start`, `end` or `center`; `center` when the stimulus omits it (ysp/experiment.h 0.7.0; `start` before) |
 | DIR | `auto`, `ltr` or `rtl` |
 | LANG | the BCP 47 tag as written (`A`-`Z`, `a`-`z`, `0`-`9`, `-`), or empty |
 | TEXT | the text's UTF-8 bytes, unchanged, to the end of the key (no NUL); it may hold `|` and `#`, since every field before it is free of them |
@@ -684,7 +690,8 @@ FONT#FACE|SIZE|WIDTH|LINE_HEIGHT|ALIGN|DIR|LANG|TEXT
 The separators are `#` (0x23) after FONT and `|` (0x7C) after every
 other field but TEXT. A loader reads the numbers as doubles (ysp/json.h
 `yjs_double()`), so `72`, `72.0` and `7.2e1` give one key. Example, the
-Stroop word RED: `fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED`.
+Stroop word RED: `fonts/NotoSans-Regular.ttf#0|72|1000|0|center|auto||RED`
+(tool v0.13.0; `start` before, section 20).
 Blocks are in bytewise order of their keys, so `ypak_runs_find()` finds
 one by binary search.
 
@@ -2972,3 +2979,73 @@ musl) pass only the descriptors without close-on-exec.
   program's path, size and time would be process state.
 - A video index that runs cannot be canceled (ysp/video.h has no
   cancel); for a copied 1080p MPEG-1 file it takes seconds.
+
+## 20. Tool v0.13.0: a text's align defaults to center (2026-11-23)
+
+A text stimulus that leaves `align` out is centered in its `width` box
+(experiment_format.md 2.11, ysp/experiment.h 0.7.0). The user decided it
+on 2026-11-23: stroop's word, with a 1000 px box and no `align`, drew
+about 500 px left of the display's center.
+
+What changed in the tool:
+
+- `ypt_derive_texts()` (`pack/derive.c`) takes a text's defaults from
+  ysp/experiment.h's table (`yexp_defaults()` of the definition's
+  version): `align`, `dir`, `lang`, `width` and `line_height`. Before,
+  it had its own copies (`start`, `auto`, `""`, 0, 0). The tool, the
+  player and the designer now read one list, so the next change of a
+  default needs no change here.
+- A derived block's key and its record in the manifest say `center` for
+  a text with no `align`. The layout centers each line in the box; a
+  single line with no `width` keeps its place (its box is the line).
+- A listed block of a GLYPHRUNS resource keeps `start` as its default.
+  The pack source description did not change.
+- The canonical bytes leave out `"align": "center"` and keep
+  `"align": "start"`, so a definition that writes either gets a new
+  experiment ID.
+
+Packs: a pack with an experiment text whose `align` was left out gets new
+glyph runs and a new pack ID. Other entries are byte-identical to
+v0.12.0's (the corpus pin, `tests/pack/corpus.sha256`, has no
+experiment and is unchanged). The manifest differs by the tool's and
+ysp/experiment.h's versions, as at each release.
+
+### Old packs
+
+A pack that v0.12.0 or earlier built laid out a text with no `align` at
+the start, and its blocks' keys say `start`. Its stored definition has no
+`align` (start was the default, which the canonical bytes leave out). The
+player 0.19.0 reads the experiment entry's derivation (`"by":
+"ysp/experiment.h 0.6.0"`) and loads the definition with that version's
+defaults (`yexp_load_written()`), so it asks for the `start` blocks that
+the pack has. A pack with no such record (tool before v0.8.0) is read
+with the oldest defaults. A player before 0.19.0 stops with "no glyph run
+block" on a pack that this tool built from a text with no `align`.
+
+Proof, Linux desktop (i5-14500, Debian 12, gcc 12.2, Release; the
+display test on Mesa llvmpipe through EGL, no window). The stroop
+example (`tests/player/stroop`, NotoSans-Regular from
+`/usr/share/fonts`) built by ypak 0.12.0 (3142888) and played with
+`--sim --seed 7` by the player 0.18.0 (3142888) and by 0.19.0:
+`trials.csv`, `events.csv`, `frames.csv`, `clock.csv` and the streams
+are byte-identical, and `session.json` differs in the two version strings
+only (the experiment ID is the same, `260eeb19...`). A stepped session of
+each, drawn at 1920 x 1080 for its 3,253 frames and read back: every
+frame's bytes are equal (14 distinct frames). The same example built by
+v0.13.0: the same data, and the first trial's word is drawn from column
+878 to 1043 (middle 961, the display's 960) where the old pack drew it
+from 466 to 632.
+
+`tests/player/align_packs.py` makes such a pack for the tests without an
+old tool: the entries of stroop with `"align": "start"` on every text,
+the definition without `align`, and the derivation naming ysp/experiment.h
+0.6.0, written by `packwriter.py`. Every entry but the manifest is
+byte-identical to the pack that ypak 0.12.0 built.
+
+### Tests
+
+| Test | Result |
+|---|---|
+| `test_pack_tool` | 484 checks (8 new): a text with no `align`, `start` and `end` give blocks keyed `center`, `start` and `end`, and their line is at (width - line) / 2, 0 and width - line of a 400 px box; the Stroop keys and the player's emulation take `center` |
+| `test_pack_derive` | 296 checks (10 new): no `align` is `center`; `start` and `end` as written |
+| Mutants (`tests/mutate/derive.toml`) | dv-01 (`align`'s default the tool's own `start`) and dv-02 (the table's row of another kind): 2 of 2 killed |

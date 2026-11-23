@@ -1992,6 +1992,7 @@ static const char* skey(const char* font, double size, double width, const char*
     st.font = font;
     st.size = size;
     st.width = width;
+    st.align = YPAK_ALIGN_CENTER;   /* a text's default from ysp/experiment.h 0.7.0 */
     if (ypak_runs_key(&st, text, strlen(text), b, sizeof buf[0]) < 0) b[0] = 0;
     return b;
 }
@@ -2033,7 +2034,7 @@ static int player_matches(const char* pack, const char* runs_name, const char* d
                 yjs_double(yjs_get(o, "size"), &st.size);
                 if ((v = yjs_get(o, "width")) != NULL) yjs_double(v, &st.width);
                 if ((v = yjs_get(o, "line_height")) != NULL) yjs_double(v, &st.line_height);
-                s = (v = yjs_get(o, "align")) != NULL ? v->u.s : "start";
+                s = (v = yjs_get(o, "align")) != NULL ? v->u.s : "center";
                 st.align = !strcmp(s, "end") ? YPAK_ALIGN_END : !strcmp(s, "center") ? YPAK_ALIGN_CENTER : YPAK_ALIGN_START;
                 s = (v = yjs_get(o, "dir")) != NULL ? v->u.s : "auto";
                 st.dir = !strcmp(s, "ltr") ? YPAK_DIR_LTR : !strcmp(s, "rtl") ? YPAK_DIR_RTL : YPAK_DIR_AUTO;
@@ -2147,7 +2148,7 @@ static void test_stroop_pack(void) {
         size_t n;
         uint8_t* m = entry_bytes(WS "/stroop.ysppak", "ysp/manifest.json", &n);
         CHECK(m && strstr((char*)m, "\"experiment\": \"experiment/stroop.json\"") && strstr((char*)m, "\"stimuli\": [\"word\"]") &&
-              strstr((char*)m, "\"key\": \"fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED\"") && strstr((char*)m, "\"derived\": ["),
+              strstr((char*)m, "\"key\": \"fonts/NotoSans-Regular.ttf#0|72|1000|0|center|auto||RED\"") && strstr((char*)m, "\"derived\": ["),
               "the manifest records the derived blocks and their experiment");
         CHECK(m && strstr((char*)m, "\"from\": [\"fonts/NotoSans-Regular.ttf\", \"experiment/stroop.json\"]"),
               "the runs' 'from': the font and the experiment (no table: the Stroop texts come from lookups)");
@@ -2418,6 +2419,41 @@ static void test_stroop_pack(void) {
         rc = ypt_rebuild(WS "/shared.ysppak", WS, WS "/shared_rebuilt.ysppak", NULL, err, sizeof err);
         CHECK(rc == 0 && same_file(WS "/shared.ysppak", WS "/shared_rebuilt.ysppak"), "shared style rebuild: %s", err);
     }
+    /* 0.13.0: a text with no align is centered in its width box (the
+     * default of ysp/experiment.h 0.7.0); start and end as written. The
+     * line's x in the block: (width - line) / 2, 0, width - line. */
+    rc = build_def("align",
+                   "\"c\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"width\": 400, \"text\": \"red\"},"
+                   " \"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"width\": 400, \"align\": \"start\", \"text\": \"red\"},"
+                   " \"e\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"width\": 400, \"align\": \"end\", \"text\": \"red\"}",
+                   "", WS "/align.ysppak", err, sizeof err);
+    CHECK(rc == 0, "align: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/align.ysppak", "exp/align.ysprun", &n);
+        ypak_runs r;
+        static const struct { const char* align; int code; double at; } want[3] = {
+            { "center", YPAK_ALIGN_CENTER, 0.5 }, { "start", YPAK_ALIGN_START, 0 }, { "end", YPAK_ALIGN_END, 1 } };
+        memset(&r, 0, sizeof r);
+        CHECK(x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0 && r.n_blocks == 3, "align: 3 blocks (%u): %s", r.n_blocks, err);
+        if (r.n_blocks == 3) {
+            int k;
+            for (k = 0; k < 3; k++) {
+                char key[128];
+                int b;
+                snprintf(key, sizeof key, "fonts/NotoSans-Regular.ttf#0|20|400|0|%s|auto||red", want[k].align);
+                b = ypak_runs_find(&r, key);
+                CHECK(b >= 0 && r.blocks[b].align == want[k].code && r.blocks[b].n_lines == 1, "align: the block '%s' (%d)", key, b);
+                if (b >= 0 && r.blocks[b].n_lines == 1) {
+                    const ypak_runs_line* ln = &r.lines[r.blocks[b].line_first];
+                    double at = want[k].at * (400.0 - ln->width);
+                    CHECK(ln->width > 10 && ln->width < 200 && fabs(ln->x - at) < 0.01, "align %s: the line at x %g, %g wide; wanted %g", want[k].align,
+                          (double)ln->x, (double)ln->width, at);
+                }
+            }
+        }
+        free(x);
+    }
     /* a fallback from the description's 'fonts': '@' from at.ttf after the
      * stimulus's font, in one block of two runs */
     rc = build_def("fallback", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}",
@@ -2574,7 +2610,7 @@ static void test_stroop_pack(void) {
                     WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'$weight' is a column of 'stroop.pstb' of type integer"),
           "a number column as text: %s", err);
     CHECK(build_def("missing", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}", "",
-                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|start|auto||mail@example': no font in the list maps 1 character (script Latn: '@' U+0040); add a font that has it") &&
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|center|auto||mail@example': no font in the list maps 1 character (script Latn: '@' U+0040); add a font that has it") &&
           strstr(err, "a fallback in 'fonts'"), "a derived text the font lacks: %s", err);
     CHECK(fopen(WS "/x.ysppak", "rb") == NULL, "a refused build left a file");
 #endif

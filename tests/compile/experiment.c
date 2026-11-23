@@ -2,7 +2,8 @@
  * implementation. CMake and CI build this as C11 with warnings as errors;
  * experiment.cpp builds the same source as C++17. It loads a small
  * definition from a fixed arena, gets the canonical bytes and the
- * experiment ID, and returns 0 to prove it links and runs. */
+ * experiment ID, loads bytes an older header stored (yexp_load_written()),
+ * and returns 0 to prove it links and runs. */
 #define YSP_JSON_IMPLEMENTATION
 #include "ysp/json.h"
 #define YSP_EXPERIMENT_IMPLEMENTATION
@@ -54,6 +55,20 @@ int main(void) {
             if (t == YEXP_T_DUR && (rows[i].flags & YEXP_R_STEP) == 0) durs += rows[i].unit[0] == 's';
         }
         if (durs == 0) return 11;
+    }
+    {
+        /* bytes stored by an older header (0.7.0): a text with no align is
+         * start as 0.6.0 wrote it */
+        static const char text3[] =
+            "{\"format\": \"ysp-experiment\", \"version\": 1,"
+            " \"stimuli\": {\"w\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 20, \"text\": \"hi\"}},"
+            " \"trials\": {\"t\": {\"events\": [{\"on\": \"w\"}, {\"wait_s\": 0.5}]}},"
+            " \"timeline\": [{\"name\": \"main\", \"trial\": \"t\"}]}";
+        const yexp_prop* al;
+        yjs_arena_init(&a, mem, sizeof mem);
+        if (yexp_load_written(&a, text3, sizeof text3 - 1, NULL, "0.6.0", &d, &report) != YEXP_OK) return 12;
+        al = yexp_prop_get(d->stimuli[0].props, d->stimuli[0].n_props, "align");
+        if (!al || al->given || strcmp(al->value->str, "start") != 0) return 13;
     }
     return strlen(yexp_version()) ? 0 : 5;
 }

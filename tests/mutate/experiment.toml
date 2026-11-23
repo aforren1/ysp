@@ -2727,3 +2727,53 @@ test = "experiment_tables"
 why = "gfx's offset is a shape's; a sound's offset is the format's own key and needs its text."
 find = '''"offset", "0", "frame", "the sound's first frame", NULL }'''
 replace = '''"offset", "0", "frame", "", NULL }'''
+
+# --- v0.7.0: a text's align defaults to center; a stored file's writer ------------
+
+[[mutant]]
+id = "a7-01"
+name = "a text's align defaults to start"
+test = "experiment"
+why = "0.7.0 (2026-11-23): a text with a width box and no align is centered; start put stroop's word 500 px left of center."
+find = '''"align", "\"center\"", "", "the lines' alignment'''
+replace = '''"align", "\"start\"", "", "the lines' alignment'''
+
+[[mutant]]
+id = "a7-02"
+name = "the writer's old default not used"
+test = "experiment"
+why = "A pack that ysp/experiment.h 0.6.0 stored left start out: read with center, it names glyph runs the pack lacks."
+find = '''if (c->writer < w->until && r->section == w->section'''
+replace = '''if (0 && c->writer < w->until && r->section == w->section'''
+
+[[mutant]]
+id = "a7-03"
+name = "the old default ends a version early"
+test = "experiment"
+why = "0.6.0 is the last writer whose default was start; 0.7.0 is the first with center."
+find = '''"align", 7000L, "\"start\""'''
+replace = '''"align", 6000L, "\"start\""'''
+
+[[mutant]]
+id = "a7-04"
+name = "a version part of four digits read"
+test = "experiment"
+why = "Each part is at most 999, so the number is exact; 1000.0.0 is text that is not a version, read as the oldest."
+find = '''if (++digits > 3) return 0;'''
+replace = '''++digits;'''
+
+[[mutant]]
+id = "a7-05"
+name = "a version part with no digits read"
+test = "experiment"
+why = "0.7.x is not a version: a pack whose record says so is read with the oldest defaults, not as 0.7.0."
+find = '''if (!digits || (k < 2 && *s++ != '.')) return 0;'''
+replace = '''if (k < 2 && *s++ != '.') return 0;'''
+
+[[mutant]]
+id = "a7-06"
+name = "yexp_load() reads with the oldest defaults"
+test = "experiment"
+why = "A file the designer or the tool reads now is this header's: no align is center."
+find = '''return yexp__load(a, text, n, host, LONG_MAX, out, report);'''
+replace = '''return yexp__load(a, text, n, host, 0, out, report);'''
