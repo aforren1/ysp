@@ -11,7 +11,8 @@
  *                             (its own process group) or "pgrp parent".
  *                             Windows: "handle valid" when HANDLE is an
  *                             inherited handle, else "handle invalid"
- *   test_child policy         POSIX: "policy N" (sched_getscheduler()).
+ *   test_child policy         POSIX: "policy N" (sched_getscheduler();
+ *                             macOS: pthread_getschedparam()).
  *                             Windows: "class N" (GetPriorityClass())
  *   test_child signals        POSIX: "sigpipe default|ignored|caught" and
  *                             "blocked N" (how many of SIGTERM, SIGINT and
@@ -43,9 +44,14 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <fcntl.h>
+#include <io.h>
 #else
 #include <dirent.h>
 #include <fcntl.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 #include <sched.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -140,6 +146,9 @@ int main(int argc, char** argv) {
     /* the arguments as the program got them, in UTF-16, to UTF-8 */
     int wn = 0, i;
     LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wn);
+    /* the test compares the log's bytes: no "\r\n" from text mode */
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
 #endif
     if (strcmp(mode, "exit") == 0 && argc > 2) {
         printf("out line\n");
@@ -218,7 +227,15 @@ int main(int argc, char** argv) {
 #if defined(_WIN32)
         say("class %lld\n", (long long)GetPriorityClass(GetCurrentProcess()));
 #else
+#if defined(__APPLE__)
+        /* macOS has no sched_getscheduler() */
+        struct sched_param sp;
+        int pol = -1;
+        if (pthread_getschedparam(pthread_self(), &pol, &sp) != 0) pol = -1;
+        say("policy %lld\n", (long long)pol);
+#else
         say("policy %lld\n", (long long)sched_getscheduler(0));
+#endif
 #endif
         return 0;
     }

@@ -251,6 +251,17 @@ template <class F> bool wait_for(ImGuiTestContext* ctx, double seconds, F done) 
 }
 
 // Frames until the run ended: at least n, then up to 10 s.
+// Frames until the fake's log has its "out armed" line: the line after its
+// "term" command, so a Stop sent later finds the handler set. A Stop sent
+// before it ends the fake by SIGTERM's default (-15): on a loaded machine,
+// one run in two.
+bool wait_armed(ImGuiTestContext* ctx) {
+    return wait_for(ctx, 10.0, [] {
+        const dsg_run_info in = run_info();
+        return in.log && strstr(in.log, "armed\n") != nullptr;
+    });
+}
+
 bool wait_end(ImGuiTestContext* ctx, int n) {
     for (int i = 0; i < n && ui_run_active(); i++) ctx->Yield();
     wait_for(ctx, 10.0, [] { return !ui_run_active(); });
@@ -411,7 +422,8 @@ void test_stop(ImGuiTestContext* ctx) {
 #if DSG_RUN_VIEW_DOUBLE
     rvd_run_stop_ends(true);
 #endif
-    IM_CHECK(start_sim(ctx, "header trial,response,rt_s,outcome\nrow 1,left,0.4,correct\nterm exit 3\nsleep 30000\n"));
+    IM_CHECK(start_sim(ctx, "header trial,response,rt_s,outcome\nrow 1,left,0.4,correct\nterm exit 3\nout armed\nsleep 30000\n"));
+    IM_CHECK(wait_armed(ctx));
     IM_CHECK(ctx->ItemExists(run_item(ctx, "Stop")));
     ctx->ItemClick(run_item(ctx, "Stop"));
     IM_CHECK(wait_end(ctx, 120));
@@ -451,12 +463,14 @@ void test_kill(ImGuiTestContext* ctx) {
 #endif
 #ifndef _WIN32
     // (Windows: no Stop goes out to a --sim run)
-    IM_CHECK(start_sim(ctx, "header trial,response,rt_s,outcome\nterm ignore\nsleep 30000\n"));
+    IM_CHECK(start_sim(ctx, "header trial,response,rt_s,outcome\nterm ignore\nout armed\nsleep 30000\n"));
+    IM_CHECK(wait_armed(ctx));
     ctx->ItemClick(run_item(ctx, "Stop"));
     ctx->Yield();
     IM_CHECK(!ctx->ItemExists(run_item(ctx, "Kill")));
     IM_CHECK(disabled(ctx, run_item(ctx, "Stop")));
-    for (int i = 0; i < 400 && !run_info().kill_offered; i++) ctx->Yield();
+    // DSG_RUN_KILL_AFTER_NS (5 s) of wall time: a count of frames is no bound
+    IM_CHECK(wait_for(ctx, 30.0, [] { return run_info().kill_offered; }));
     IM_CHECK(run_info().kill_offered);
     ctx->Yield();
     IM_CHECK(ctx->ItemExists(run_item(ctx, "Kill")));
@@ -539,7 +553,12 @@ void test_rig_combo(ImGuiTestContext* ctx) {
     IM_CHECK(strstr(t, "lab2") != nullptr);
     IM_CHECK(strstr(t, "No profile (keyboard only)") == nullptr);
     IM_CHECK(strstr(t, "Rig: profile (view 570 mm, 1920 px over 518.4 mm)") != nullptr);
-    ctx->KeyPress(ImGuiKey_Escape);
+    // Escape does not close it: the designer has no keyboard navigation
+    // (ImGuiConfigFlags_NavEnableKeyboard), so the open combo would block
+    // the next click unless the scroll to it focuses its window, which only
+    // some fonts' layouts need
+    ctx->PopupCloseAll();
+    IM_CHECK_EQ(ImGui::GetCurrentContext()->OpenPopupStack.Size, 0);
     // simulated: "No profile" too
     ctx->ItemClick(run_item(ctx, "Simulated (--sim)"));
     IM_CHECK(ui_run_settings()->sim);

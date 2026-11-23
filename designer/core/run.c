@@ -589,10 +589,13 @@ static void csv_feed(csv_state* c, const char* s, size_t n) {
 }
 
 /* The log's bytes: lines into the buffer, each cut at RUN_LINE_MAX, then
- * the oldest lines past DSG_RUN_LOG_LINES dropped with one move a read. */
+ * the oldest lines past DSG_RUN_LOG_LINES dropped with one move a read.
+ * '\r' is dropped: on Windows the player's stdout and stderr are in text
+ * mode, so its lines end in "\r\n". */
 static void log_feed(dsg_run* r, const char* s, size_t n) {
     size_t i;
     for (i = 0; i < n; i++) {
+        if (s[i] == '\r') continue;
         if (s[i] == '\n') {
             r->log[r->log_n++] = '\n';
             r->log_lines++;

@@ -423,6 +423,7 @@ static void test_progress(void) {
              "row 1,plain,no,miss,9,0.5,right\n"
              "wait %s\n"
              "err warning: on stderr\n"
+             "err a line in CR LF\\r\n"
              "row 2,\"q\",no,timeout,9,,\n"
              "raw 3,\"half\n"
              "out half written\n"
@@ -456,6 +457,8 @@ static void test_progress(void) {
     CHECK(in.trials == 3 && strcmp(in.last_response, "") == 0 && strcmp(in.last_outcome, "timeout") == 0 && in.last_rt_s < 0,
           "a row with no response: %d '%s' '%s' %g", in.trials, in.last_response, in.last_outcome, in.last_rt_s);
     CHECK(strstr(in.log, "warning: on stderr\n") != NULL, "standard error in the log");
+    /* Windows' text mode ends each line in "\r\n" */
+    CHECK(strstr(in.log, "a line in CR LF\n") != NULL && !strchr(in.log, '\r'), "the log drops '\\r'");
     CHECK(in.state == DSG_RUN_RUNNING && in.exit_text[0] == 0 && !in.kill_offered, "running");
     go("progress.go2");
     UNTIL_END(r, &in);

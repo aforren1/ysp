@@ -3035,7 +3035,8 @@ the Run section's functions as external symbols.
   `last_rt_s` -1.
 - **The log**: its last `DSG_RUN_LOG_LINES` (200) lines, each cut at
   1,024 bytes, as one text; the oldest lines go with one `memmove()` a
-  read.
+  read. A `\r` is dropped: on Windows the player's standard output and
+  error are in text mode, so its lines end in `\r\n`.
 - **States**: STARTING, RUNNING when `trials.csv` opens or the log has
   `ysp_player: running;` (a real run's start line), STOPPING after a Stop
   that went out, ENDED.
@@ -3160,7 +3161,8 @@ tree's `fake_player` and `ysp_player`): 150 checks on Linux, about
   of the player's order, a quoted field with a comma, quotes and a line
   break before them, names that start as `response` and `rt_s` do, a row
   with an empty response and `rt_s`, a row in two reads with a line break
-  in a quoted field; standard error in the log; the end line; `Done: 4
+  in a quoted field; standard error in the log; a line in `\r\n` without
+  its `\r`; the end line; `Done: 4
   trials in DIR.`. No read without a wake-up (3 writes that the tick did
   not see, then saw after the wake-up, with the clock held). The log's
   last 200 lines, a 3,000-byte line cut at 1,024. Exit 1, five lines: the
@@ -3229,8 +3231,9 @@ check named):
 | r-38: elapsed always 0 | elapsed |
 | r-39: the stop line's trial not read | stopped |
 | r-40: a doubled quote kept double | a row in two reads |
+| r-41: the log keeps `\r` | the log drops `\r` |
 
-40 of 40 killed.
+41 of 41 killed.
 
 **Not done, or only by CI.**
 - Windows: the `_WIN32` branches (`_wfsopen()`, the exit texts, the

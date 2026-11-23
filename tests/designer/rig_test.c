@@ -637,7 +637,11 @@ static void part_check(const char* oddball, const char* afc2, const char* visuom
 static int mtime_of(const char* path, struct timespec* ts) {
     struct stat st;
     if (stat(path, &st) != 0) return -1;
+#if defined(__APPLE__)
+    *ts = st.st_mtimespec;
+#else
     *ts = st.st_mtim;
+#endif
     return 0;
 }
 #endif

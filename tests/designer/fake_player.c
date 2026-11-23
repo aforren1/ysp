@@ -27,7 +27,8 @@
  *                   written to DIR (trial N has no row)" and exit CODE
  *   raise SIG       raise(SIG): the end by a signal
  *   exit CODE       exits with CODE (also at the script's end: 0)
- * In TEXT, "\n" is a line break and "\\" a backslash.
+ * In TEXT, "\n" is a line break, "\r" a carriage return and "\\" a
+ * backslash.
  * Windows has no SIGTERM from another process, and this program opens no
  * window, so Stop reaches it no more than it reaches `ysp_player --sim`. */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
@@ -106,6 +107,9 @@ static void unescape(char* s) {
     for (; *s; s++) {
         if (s[0] == '\\' && s[1] == 'n') {
             *o++ = '\n';
+            s++;
+        } else if (s[0] == '\\' && s[1] == 'r') {
+            *o++ = '\r';
             s++;
         } else if (s[0] == '\\' && s[1] == '\\') {
             *o++ = '\\';
