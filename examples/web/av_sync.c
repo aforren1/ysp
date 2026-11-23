@@ -407,6 +407,7 @@ int main(int argc, char** argv) {
         printf("gaps of 2 ms or more: n %d p50 %.3f p99 %.3f max %.3f ms\n", s_gap.n, s_gap.med, s_gap.p99, s_gap.max);
         printf("%s\n%s\n", line, aline);
         if (k < sizeof json - 1200) {
+            const int reports = (int)n_reports; /* one read: the audio thread writes it */
             k += (size_t)snprintf(json + k, sizeof json - k, "],");
             k += put_stat(json + k, sizeof json - k, "audio_minus_flip_ms", s_av);
             k += (size_t)snprintf(json + k, sizeof json - k, ",");
@@ -420,8 +421,8 @@ int main(int argc, char** argv) {
                                   "\"callback_step_ms\":%.4f,\"reports\":%d,\"report_span_s\":%.3f,\"xruns\":%u,\"worst_tier\":%d,"
                                   "\"drift_ppm\":%.2f,\"fit_spread_us\":%.1f,\"lead_ms\":%.3f,\"period\":%d,\"rate\":%u,"
                                   "\"have_audio\":%d,\"stopped\":%d,\"screen\":",
-                                  (int)n_ticks, nominal_ms, n_long, n_zero, min_pos < 1e9 ? min_pos : 0.0, (int)n_reports,
-                                  n_reports > 1 ? (double)(last_report_t - first_report_t) * 1e-9 : 0.0, (unsigned)ac.xruns,
+                                  (int)n_ticks, nominal_ms, n_long, n_zero, min_pos < 1e9 ? min_pos : 0.0, reports,
+                                  reports > 1 ? (double)(last_report_t - first_report_t) * 1e-9 : 0.0, (unsigned)ac.xruns,
                                   (int)ac.worst_tier, ac.drift_ppm, ac.fit_spread_ns * 1e-3, (double)ac.lead_ns * 1e-6,
                                   (int)ac.period, (unsigned)ac.rate, have_audio, aborted);
             k += put_str(json + k, sizeof json - k, line);

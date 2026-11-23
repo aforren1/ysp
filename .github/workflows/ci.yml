@@ -563,7 +563,7 @@ jobs:
                 printf 'sha256:%s,' "$(sha256sum $T/patches/$f.patch | cut -c1-64)"; done)
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -DYLAY_PATCHES="\"${P%,}\"" -c pack/layout.c -o lo/ysp_layout.o
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -c pack/colr.c -o lo/ysp_colr.o
-          emcc $W -Ipack -isystem $T/skribidi/include -DYSCR_NO_SDL -DYLAY_TEST_DIR='"tests/layout"' -DYLAY_TEST_FONTS='"/no-fonts"' -c tests/layout/layout_test.c -o lo/test.o
+          emcc $W -Ipack -isystem $T/skribidi/include -isystem $T/harfbuzz/src -DYSCR_NO_SDL -DYLAY_TEST_DIR='"tests/layout"' -DYLAY_TEST_FONTS='"/no-fonts"' -c tests/layout/layout_test.c -o lo/test.o
           # HarfBuzz needs the C++ library: link with em++.
           em++ -O2 -sNODERAWFS=1 -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -o lo/test_layout.js lo/*.o
           node lo/test_layout.js
