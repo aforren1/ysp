@@ -22,6 +22,10 @@ ImGuiID te_in_child(ImGuiTestContext* ctx, const char* window, const char* item)
 bool te_modal_open();
 // Shows a main view by a click on its switch ("Text", "Chart", "Tables").
 void te_show(ImGuiTestContext* ctx, const char* label);
+// With --viewports (2026-11-23): the mock platform's OS window of vp
+// minimized or not, and UiPlatform.fullscreen's calls and its last "on".
+void te_viewport_minimize(ImGuiViewport* vp, bool on);
+int te_fullscreen_calls(bool* on);
 
 // Each part registers its tests under its own category.
 void te_register_chart(ImGuiTestEngine* e);    // "chart"

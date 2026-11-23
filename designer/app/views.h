@@ -92,6 +92,21 @@ int64_t ui_now_ns();
 // session shows. Each call reads it again; the strings stay valid until a
 // call that changes the preview (preview.h, "Pointers").
 const dsg_preview_where* ui_preview_where();
+// The cursor that the preview's pane last gave dsg_preview_pointer(), in
+// participant px; false while the cursor is not over the display. For the
+// tests: the pane's zoom and pan change the mapping (2026-11-23).
+bool ui_preview_pane_pointer(float* x, float* y);
+// The preview in an OS window of its own (2026-11-23, "Preview size"):
+// ImGui's multi-viewport, where the platform has it (native SDL3 on X11,
+// Windows and macOS; not Wayland, not the web). can: the platform makes
+// such windows now. popped: the preview draws in its window, not in the
+// AUX pane; the view file's part "aux" keeps it. fullscreen: that window
+// full screen; false when it cannot (not popped, no UiPlatform.fullscreen).
+bool ui_preview_can_pop();
+bool ui_preview_popped();
+void ui_preview_pop(bool out);
+bool ui_preview_fullscreen();
+bool ui_preview_set_fullscreen(bool on);
 // The Preview view in the AUX pane, as its toolbar check box shows and hides
 // it (step 5's names: the Preview was the pane's only view).
 bool ui_aux_open();

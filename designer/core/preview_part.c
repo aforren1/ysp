@@ -32,6 +32,8 @@ void dsg_preview_settings_default(dsg_preview_settings* s) {
     s->session.pin_row = -1;
     s->speed = 1.0;
     s->scale = DSG_PV_SCALE_FIT;
+    s->zoom = 1.0;
+    s->details = true;
 }
 
 static bool speed_ok(double v) { return v == 0.25 || v == 0.5 || v == 1.0 || v == 2.0; }
@@ -139,7 +141,14 @@ void dsg_preview_part_read(const dsg_view* v, dsg_preview_settings* s, bool* ope
         size_t sn = 0;
         const char* sc = yjs_string(yjs_get(root, "scale"), &sn);
         if (sc && sn == 3 && memcmp(sc, "1:1", 3) == 0) s->scale = DSG_PV_SCALE_1TO1;
+        /* a zoom out of range reads as Fit, as any other bad value */
+        if (sc && sn == 4 && memcmp(sc, "zoom", 4) == 0 && yjs_double(yjs_get(root, "zoom"), &d) == YJS_OK && d >= DSG_PV_ZOOM_MIN &&
+            d <= DSG_PV_ZOOM_MAX) {
+            s->scale = DSG_PV_SCALE_ZOOM;
+            s->zoom = d;
+        }
     }
+    if (yjs_bool(yjs_get(root, "details"), &b) == YJS_OK) s->details = b;
     yjs_arena_free(&a);
 }
 
@@ -173,7 +182,10 @@ int dsg_preview_part_write(dsg_view* v, const dsg_preview_settings* s, bool open
     for (i = 0; i < s->session.n_fields && i < DSG_SESSION_FIELDS; i++)
         bad |= yjs_set(&a, fields, s->session.fields[i].name, yjs_new_stringz(&a, s->session.fields[i].value));
     bad |= yjs_set(&a, root, "fields", fields);
-    bad |= yjs_set(&a, root, "scale", yjs_new_stringz(&a, s->scale == DSG_PV_SCALE_1TO1 ? "1:1" : "fit"));
+    bad |= yjs_set(&a, root, "scale",
+                   yjs_new_stringz(&a, s->scale == DSG_PV_SCALE_1TO1 ? "1:1" : s->scale == DSG_PV_SCALE_ZOOM ? "zoom" : "fit"));
+    bad |= yjs_set(&a, root, "zoom", yjs_new_double(&a, s->scale == DSG_PV_SCALE_ZOOM ? s->zoom : 1.0));
+    bad |= yjs_set(&a, root, "details", yjs_new(&a, s->details ? YJS_TRUE : YJS_FALSE));
     bad |= yjs_set(&a, root, "rig", yjs_new_stringz(&a, s->session.rig));
     if (!bad) {
         size_t n = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);

@@ -35,6 +35,9 @@ continuous-input tasks in it is the baseline that format version 2 and
 - Decision: one C++ program, built per platform and with emscripten from
   the same source. It needs a C++ compiler and no C++ runtime
   ([imgui_probe.md](imgui_probe.md), finding 6). The headers stay C.
+- Version: Dear ImGui v1.93.0. Since 2026-11-23 the docking branch at the
+  same release (tag `v1.93.0-docking`, `b916186e66aa`), for the preview's
+  window of its own; docking itself is off ("Preview size (2026-11-23)").
 - Rejected: a TypeScript web app. It gets text editing and accessibility
   from the browser, but it needs the player in WebAssembly for every
   preview, a second toolchain (Node, a bundler), and custom canvas code
@@ -3683,6 +3686,363 @@ ran here: no real player, no window). It should measure and see:
   the Run view, the rig combo and the preview's band, the "A run goes"
   question, and the loop's wait with `ui_run_wait_ms()`.
 
+#### Preview size (2026-11-23)
+
+Branch `step6-pvsize`, from `designer-step6` (`3142888`). The hand test of
+steps 5 and 6 found the preview too small to read small text: at Fit, a
+1920 x 1080 display in a pane about 45 % of the window wide. The user chose
+(2026-11-23) zoom and pan, a pane of any width, and a window of its own.
+
+**Part 1: zoom, pan, the splitter and the details (as built).**
+- **Zoom steps.** The wheel over the display steps through 1/8, 1/6, 1/4,
+  1/3, 1/2, 2/3, 1, 2, 3, 4, 6, 8, 12 and 16 framebuffer px per
+  participant px (`DSG_PV_ZOOM_MIN` to `_MAX`). From 1 up each step is a
+  whole number, so a participant px is a whole square of device px.
+  Decision 6 holds: the nearest sampler at a whole zoom of 1 or more (the
+  bytes exact), ImGui's linear sampler below 1, and no mipmaps. Scaled
+  below 1, the pane says "Scaled: fine patterns alias; use 1:1". A
+  touchpad's part notches add up to whole steps. The chart's zoom (a
+  factor of 1.15 a notch) was not taken: most of its zooms are not whole,
+  and above 1 they would need the linear sampler.
+- **About the cursor.** A step keeps the participant point under the
+  cursor where it is, within the half device px that the image's corner
+  snaps to, on an axis where the image is larger than the display's area.
+  Where the image is smaller, it stays inside the area, so the anchor
+  holds there only while the image does not reach the area's edge. The
+  readout after "1:1" gives the zoom in percent.
+- **Presets.** Fit (the largest zoom that fits, at most 1, at the area's
+  start, as before) and 1:1 (about the area's middle). The view file's
+  part `preview` keeps `"scale"` as `"fit"`, `"1:1"` or `"zoom"` with
+  `"zoom": z`; a zoom out of its bounds reads as Fit. The pan is not kept:
+  it depends on the pane's size.
+- **Pan: a middle drag.** The left button and the cursor are the
+  session's: a left click claims the keyboard, and the cursor over the
+  display is the pointer of every `position2d` role, held down or not.
+  Space and a drag was rejected: while the keyboard is claimed, Space is
+  the session's key (`preview/key_space`). A pan only outside the
+  session's claim was rejected: it would change what a drag does when a
+  click has claimed the keyboard. The middle button reaches no session
+  (`preview.h` has no button input), and the chart pans with it too. A
+  middle press claims no keyboard. The image covers the area on an axis
+  where it is larger, and stays inside it where it is smaller.
+- **The pointer.** Participant px are `(cursor - the image's corner) x W /
+  the image's width`, with the corner as drawn (whole framebuffer px) at
+  any zoom and pan. The item that takes the cursor and the clicks is the
+  part of the image that shows, so the area outside the image sends
+  `inside` false.
+- **The display's area** is the room's height, or the image's when that
+  is less, so Fit's layout and size are as before. The 1:1 child's scroll
+  bars are gone: the pan replaces them.
+- **The splitter** is the spacing between the main view and the AUX pane
+  (`//##designer/##aux_split`). A drag sets the pane's share of the room
+  that the side column leaves; the main view keeps at least 240 points
+  when there is room, and the pane at least 320, as before. The share goes
+  in a part of its own, `"aux": {"width": share}` (`ui.cpp`), because the
+  pane holds the Run view too; 0.15 to 0.85, else the default 0.45.
+- **Details.** The "Details" check box in the controls folds the
+  settings, the outputs and the data set. The display then takes their
+  room, less two rows for what comes and goes under it (the alias note,
+  the choice strip). The fixed rows rule of the 2026-11-21 hand test holds
+  folded too: a row above the display that comes and goes (the issue, the
+  stale and note banners) moves it down and does not rescale it. The part
+  `preview` keeps `"details"`.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release):
+- `test_designer_ui` (261 checks, 79 new or changed since 182): part 8,
+  the part `preview` with `"details"` and a zoom round-trips, and a zoom
+  of 40 or 0.1 reads as Fit; the part `aux` is written with the default
+  share, and a share of 0.6 written by hand sets the pane's width, 0.95
+  reads as 0.45. Part 10, on the double with fake GL caps: a wheel notch
+  over the display at 1:1 gives zoom 2, the image 1600 x 1200 px at a
+  whole px, its corner moved so the cursor's px stays (100, 50), with no
+  new pointer call; the nearest sampler around it and no alias note; a
+  middle drag of (-60, -40) moves the image by that, claims no keyboard,
+  and the cursor's px stays; (301, 123) px into the panned image is (150.5,
+  61.5); a left click claims the keyboard; a far drag stops with the
+  image's corner at the area's; two notches down give 1:1, then 2/3 with
+  no sampler callback and the alias note; folded, no details child.
+- `test_designer_te`, three new tests on part A's preview: `preview/zoom`
+  (the first notch above Fit; each later step about the cursor within half
+  a device px where the image covers the area, to 2; a middle drag of
+  (-80, -50) moves the image so and keeps the cursor's px; the mapping
+  `(cursor - corner) / 2` exact; a left click claims the keyboard; Fit
+  again; below Fit a drag moves the image to the area's right edge and no
+  further, and Fit puts it back), `preview/split` (a drag of -150 widens
+  the pane by 150 and narrows the main view by 150, within 1 point; the
+  width is back after a save, another project and this one again; a drag
+  far left leaves the main view at least 200 wide) and `preview/details`
+  (a 600 x 1200 display, bound by the height: folded, no details child
+  and the display at least 50 points taller; the stale banner does not
+  rescale it; unfolded, it gives the room back). 50 of 50. The test reads
+  the image's box from the headless gray box: ImGui 1.93 draws a fill
+  whose corners are not on whole px with an antialiased fringe, so its
+  opaque vertices are 0.5 px inside the box.
+- `test_designer_preview_gl` (25 checks, 6 new): 2b, zoom 2 after a middle
+  drag of (-37, -21), so the pan is not a whole number of texels:
+  framebuffer 0 is the texture with each texel a 2 x 2 square of px, 0 px
+  differ over the part that shows, on llvmpipe (LLVM 15.0.6) and on the
+  RX 6600 (radeonsi).
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on the changed files and emcc (`-fsyntax-only`) on
+  the pane, `ui.cpp` and `preview_part.c`: no warning. The Release build
+  gives no warning.
+
+**Hand mutants** (each reverted; each fails the test named):
+
+| Mutant | Fails |
+|---|---|
+| z-01: the wheel zooms about the corner, not the cursor | ui part 10: about the cursor; te `preview/zoom` |
+| z-02: a middle drag does not pan | ui part 10: a middle drag moves the image; te `preview/zoom` |
+| z-03: a middle press claims the keyboard | ui part 10; te `preview/zoom` |
+| z-04: the pointer from the visible corner, not the image's | ui part 10: (150.5, 61.5); te `preview/zoom` |
+| z-05: the nearest sampler only at 1:1 | ui part 10: zoom 2, the nearest sampler; GL 2b: 7,923 px differ |
+| z-06: the nearest sampler below 1 too | ui part 10: Fit and 2/3, no sampler change |
+| z-07: no clamp of the pan | ui part 10: a far drag stops at the area's corner |
+| z-08: the wheel zooms by 1.15 | ui part 10: zoom 2; te `preview/zoom` |
+| z-09: a zoom written as Fit | ui part 8: the zoom's JSON |
+| z-10: a zoom read without its bounds | ui part 8: a zoom of 40 or 0.1 is Fit |
+| z-11: `"details"` not written | ui part 8: the part holds the settings |
+| z-12: folded, the display keeps the 7 rows | te `preview/details`: 50 points taller |
+| z-13: folded, the details still drawn | ui part 10; te `preview/details` |
+| z-14: the Details box changes nothing | te `preview/details` |
+| z-15: folded, the rows that come and go rescale the display | te `preview/details`: the stale banner |
+| z-16: Fit keeps the pan | te `preview/zoom`: Fit puts the image back |
+| s-01: a splitter drag changes nothing | te `preview/split` |
+| s-02: the part `aux` not written | ui part 8; te `preview/split` |
+| s-03: the part `aux` not read at an open | ui part 8: the share 0.6; te `preview/split` |
+| s-04: a share out of its bounds read | ui part 8: 0.95 reads as 0.45 |
+| s-05: the main view keeps no least width | te `preview/split`: at least 200 |
+
+**Not done in part 1.** The window was not opened: no person used the
+wheel, the drag or the splitter on a display. The 1:1 preset's zoom about
+the area's middle has no test.
+
+**Part 2: the preview in a window of its own (probe, then as built).** The
+user asked whether Dear ImGui's multi-viewport (the docking branch) can
+give it. It can, on native SDL3 with X11, Windows or macOS; the probe found
+no blocker.
+
+*The switch.* `tools/vendor_designer.py` pins ImGui's tag
+`v1.93.0-docking` (`b916186e66aa3c02b72c6ca17455516512ed8049`) with new
+SHA-256 values for the 16 files (`imgui_tables.cpp`, `imconfig.h`, the
+three `imstb_*.h`, `LICENSE.txt` and `imgui_impl_opengl3_loader.h` are the
+same bytes as on master). The Test Engine keeps its tag `v1.93.0`: it has
+one tag a release for both branches. With nothing else changed (viewports
+off, docking off), the build gave no warning and ctest passed 148 of 148,
+the Test Engine on.
+
+*Findings.*
+- **The shared GL context.** gfx draws the preview's output texture on the
+  main context inside `ui_frame()`; the popped-out window's context
+  (`SDL_GL_SHARE_WITH_CURRENT_CONTEXT`, made by ImGui's SDL3 backend)
+  samples it after the main viewport's draw. GL ES 3.0 appendix D asks for
+  a Finish or a fence that the other context waits on. The probe
+  `tests/probe/designer_viewports/fence_probe.c` draws a round's color
+  into a 1920 x 1080 texture on context A in 8 passes of 64 tiles with a
+  loop in the shader, then context B (shared, the same thread, as SDL's
+  `MakeCurrent`) samples it at once and reads 64 px: bad rounds with no
+  sync, `glFlush()`, a fence and `glFinish()`: RX 6600 (radeonsi) 0, 0, 0
+  and 0 of 2,000; UHD 770 (iris), no sync, 0 of 2,000; llvmpipe (2
+  threads, 1 pass) 0, 0, 0 and 0 of 40 (B's first call waits for A's
+  scene: 275 ms). No driver here showed a half-drawn frame without sync.
+  Decision: keep a fence anyway, because the spec asks for it and other
+  drivers (NVIDIA, Windows, macOS) were not tried: `gl_viewports.h`, a
+  `glFenceSync()` and `glFlush()` after the main draw while a second
+  viewport exists, and `glWaitSync()` in a wrapper of the backend's
+  `Renderer_RenderWindow`. It costs 0.035 ms a frame on the RX 6600 in the
+  probe (A's calls, median 0.072 against 0.037 ms) and nothing while the
+  preview is in the pane. Its mutant survives every test here (p-10).
+- **Redraw on input with two windows.** Every SDL event goes through
+  `handle()`, whatever its window, so an event of the popped-out window
+  wakes the loop. Measured under Xvfb (below), stroop, the preview paused:
+  the main thread woke 4 times in 10 s and used 2 to 4 ticks (10 ms each)
+  popped out, and the same in the pane. The build before this work
+  (ImGui master, the pane) woke 8 times in 20 s and used 3 ticks: the
+  same. So the pop-out adds no idle cost; the small cost is older, and
+  only with a paused preview shown (with no preview: 6 or 7 wake-ups in
+  20 s, 0 ticks, before and after). 20 cursor moves over the popped-out
+  window drew frames (253 ticks), as over the main window (200).
+  `main.cpp` now takes minimize and restore from the main window's own
+  events only; the popped-out window's state comes from ImGui
+  (`ImGuiViewportFlags_IsMinimized`), so a minimized main window does not
+  pause a popped-out preview, and a minimized preview window does.
+- **Skribidi text** in the popped-out window draws as in the pane (the
+  names, the rig band): its glyph pages are ImGui textures, shared.
+- **Text input and the IME.** Typed digits reached a settings field of the
+  popped-out window, and keys reached the session after a click
+  on its display (Xvfb, XTest; "r" gave stroop's response `r`). The IME was
+  not tried: Xvfb has none, and an fcitx5 started here would join the
+  user's session bus. From the code: SDL3's backend starts text input on
+  the window that has the keyboard focus, so ImGui's fields in the popped
+  window get text; `SDL_EVENT_TEXT_EDITING` goes to the focused Skribidi
+  field only, and the popped-out window has none, so a composition there
+  is not shown, as for ImGui's fields in the main window
+  (`SDL_HINT_IME_IMPLEMENTED_UI` is `composition`).
+- **The Test Engine with viewports.** The runner has a mock platform
+  (`--viewports`: each OS window a place and a size in memory, one
+  3840 x 2160 monitor). Every test passes with it, 51 of 51, as without
+  it; ctest runs both (`test_designer_te`, `test_designer_te_viewports`).
+- **X11 here.** No Xvfb was installed: the Debian package
+  `xvfb 2:21.1.7-3+deb12u13` was downloaded with `apt-get download` and
+  unpacked in the scratch folder, not installed; it ran as `:87`, never the
+  user's display, with llvmpipe through EGL. The preview's window came up
+  as an X window of its own (960 x 640, named "Preview") at the pane's
+  place, and its display showed the session. Xvfb has no window manager:
+  keys reach a window only after an explicit X focus, and Full screen
+  (`SDL_SetWindowFullscreen()`, which asks the window manager through
+  `_NET_WM_STATE`) returned true and changed nothing. SDL3's backend gives
+  a secondary window a swap interval of 0, so it does not wait for vsync
+  and can tear.
+- **Wayland** is not on this machine. ImGui's SDL3 backend turns on
+  viewports only for the video drivers `windows`, `cocoa`, `x11`, `DIVE`
+  and `VMAN`, so on Wayland `NewFrame()` turns `ViewportsEnable` off and
+  Pop out is disabled with a tooltip that says so (XWayland, with
+  `SDL_VIDEO_DRIVER=x11`, works as X11). SDL's Wayland notes say that a
+  toplevel window can neither set nor read its position; the SDL 3 header
+  says a position request "can be denied by the windowing system". In a
+  browser there is one canvas: `main.cpp` sets no viewports there.
+
+*As built.*
+- `main.cpp` (native only) sets `ImGuiConfigFlags_ViewportsEnable` before
+  the backends start; after the main viewport's draw, `glvp::begin()`,
+  `ImGui::UpdatePlatformWindows()`, `ImGui::RenderPlatformWindowsDefault()`,
+  the main context current again, `glvp::end()`, then the main swap.
+  `UiPlatform.fullscreen` is `SDL_SetWindowFullscreen()` on the
+  viewport's window (SDL's default: the desktop's mode, so the display's
+  mode does not change); a failure prints SDL's error.
+- `ui.cpp`: Pop out moves the Preview from the AUX pane into the top-level
+  ImGui window "Preview##window", with `ImGuiViewportFlags_NoAutoMerge` (an
+  OS window even where it would fit inside the main one) and the OS's
+  decorations and task bar entry (`NoDecoration` and `NoTaskBarIcon`
+  cleared), so the window manager moves, resizes, maximizes and closes it.
+  It opens where the pane was, at least 960 x 640. The OS's close button
+  puts the preview back in the pane. The Run view stays in the pane. The
+  part `aux` keeps `"popped"`, so a project opens the way it was left.
+- The pane's controls: Pop out or Pop in (disabled, with why, where the
+  platform has no viewports), and while popped out Full screen or Leave
+  full screen. Esc leaves full screen when the session does not have the
+  keys (when it has them, Esc gives them back first).
+
+*The frame's cost, in the pane and popped out.* `test_designer_preview_gl
+--bench PROJECT 60 1000 [popout]` on the conditions of "Part D as built"
+(EGL's device platform, no window; pinned to CPUs 2 and 4, one run at a
+time under the measuring lock, the 1-minute load under 1 before each run;
+`LP_NUM_THREADS=2`; 1,000 frames after 60; two runs). "popout": the
+preview in a 1920 x 1080 window of its own on a second pbuffer and a
+shared context (the test's own viewports platform), the main window
+1920 x 1080 without the pane; render then includes that window's draw and
+its `glFinish()`. Milliseconds: tick, views, render, finish; total median,
+p99, max; run 2's median.
+
+| Device | Project | Preview | tick | views | render | finish | total: median, p99, max | run 2: median |
+|---|---|---|---|---|---|---|---|---|
+| RX 6600 | stroop | in the pane | 0.03 | 0.10 | 0.02 | 0.51 | 0.65, 0.90, 1.14 | 0.65 |
+| RX 6600 | stroop | popped out | 0.02 | 0.08 | 0.45 | 0.01 | 0.56, 0.65, 0.85 | 0.58 |
+| RX 6600 | bimanual | in the pane | 0.04 | 0.14 | 0.03 | 0.54 | 0.80, 0.90, 0.95 | 0.70 |
+| RX 6600 | bimanual | popped out | 0.02 | 0.15 | 0.59 | 0.01 | 0.76, 0.99, 1.00 | 0.78 |
+| RX 6600 | oddball | in the pane | 0.02 | 0.11 | 0.02 | 0.48 | 0.64, 0.87, 0.90 | 0.64 |
+| RX 6600 | oddball | popped out | 0.01 | 0.09 | 0.48 | 0.01 | 0.59, 0.67, 0.87 | 0.63 |
+| llvmpipe | stroop | in the pane | 2.21 | 0.14 | 28.22 | 0.98 | 31.58, 33.40, 38.48 | 31.79 |
+| llvmpipe | stroop | popped out | 2.30 | 0.15 | 40.23 | 0.00 | 42.70, 44.24, 51.02 | 42.73 |
+| llvmpipe | bimanual | in the pane | 1.77 | 0.18 | 28.79 | 1.21 | 31.96, 32.46, 37.33 | 31.97 |
+| llvmpipe | bimanual | popped out | 1.95 | 0.22 | 41.40 | 0.00 | 43.58, 44.71, 49.44 | 43.57 |
+| llvmpipe | oddball | in the pane | 1.67 | 0.16 | 28.14 | 1.15 | 31.12, 32.78, 33.25 | 31.20 |
+| llvmpipe | oddball | popped out | 1.92 | 0.18 | 40.30 | 0.00 | 42.41, 44.06, 46.79 | 42.40 |
+
+Linux desktop, Intel Core i5-14500, Debian 12, kernel 6.11.5-liquorix,
+Mesa 22.3.6, gcc 12.2, Release, the docking branch. The 1-minute load
+before each run was 0.72 to 0.96, but 1.12 before bimanual's first run in
+the pane on llvmpipe (its second run, at 0.91, gives the same median);
+after a run up to 0.94 on the RX 6600 and up to 2.68 on llvmpipe, from the
+run's own threads. The pane's rows agree with "Part D as built" within
+0.1 ms on the RX 6600 and 0.5 ms on llvmpipe.
+
+- **RX 6600: popped out costs no more** than in the pane (0.56 to 0.78 ms
+  against 0.64 to 0.80 ms median, p99 at most 1.0 ms): the GPU's wait moves
+  from the main window's finish to the second window's draw and finish
+  (render), and the second context adds nothing that shows.
+- **llvmpipe on two cores: popped out costs about 11 ms more** a frame
+  (42.4 to 43.6 against 31.1 to 32.0 ms): the second window is a second
+  1920 x 1080 framebuffer to clear and draw, and its Fit display is larger
+  than the pane's, so ImGui's draw samples more texels on the CPU. Nothing
+  fits 16 ms on llvmpipe in the pane either (Part D); the knob is the same,
+  the display's size, and on llvmpipe also the popped-out window's size.
+
+**Docking: a recommendation, not built.** The branch can also turn on
+docking (`ImGuiConfigFlags_DockingEnable`). With it, the main view, the
+AUX views, the side column and the issues would be dockable windows over a
+dock space, and the AUX pane a dock node: its splitter, its tabs (Preview
+and Run as tabs or stacked), a pop-out by dragging a tab out of the
+window, and the layout kept by ImGui's ini text, which the view file
+already stores (`dsg_view.imgui_ini`). What it would cost: `ui.cpp`'s
+layout (about 150 lines) rewritten around `DockSpaceOverViewport()` and a
+default layout built with `DockBuilder*()`, which is in `imgui_internal.h`
+and marked beta; every test path that goes through `//##designer/LABEL`
+(the Test Engine's and `ui_test.cpp`'s `child_drawn()`, `pane_window()`)
+changed to top-level windows; new ways to lose a view (a closed or
+undocked tab) that need tests and a way back; and the fixed-rows and
+splitter rules of part 1 moved onto the dock node. Not measured. It gives
+nothing that parts 1 and 2 do not give for the preview today. Recommended:
+not now; again when the designer has more panes than the three it has, or
+when the user wants tabs.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release):
+- `test_designer_te`, `preview/popout` (new): with no viewports Pop out is
+  disabled and `ui_preview_pop(true)` does nothing; with `--viewports`, a
+  click on Pop out gives "Preview##window" a viewport of its own with the
+  OS's decorations and a task bar entry, at least 960 wide, the pane gone
+  from the main window, and the session running on; a click on its display
+  claims the keyboard and Escape gives it back; the wheel zooms there;
+  Full screen and Leave full screen each call `UiPlatform.fullscreen` once,
+  with on true then false; the main window hidden does not pause it, its
+  own minimized does (no frame steps), and back; saved, another project
+  and this one again: popped out; the OS close puts it back in the pane.
+  51 of 51 with and without `--viewports`.
+- `test_designer_preview_gl` (32 checks, 7 new): 2c, popped out at 1:1 on
+  the test's viewports platform: a window of its own on a context of its
+  own, the image 1100 x 360 px at a whole px, and that context's
+  framebuffer equal to the texture, 0 of 1,584,000 bytes differ; popped in,
+  one viewport again. On llvmpipe, the RX 6600 and the UHD 770.
+- ctest, Release, examples on, `DISPLAY` and `WAYLAND_DISPLAY` unset: 149
+  of 149 with the Test Engine on (`test_designer_te_viewports` is new), 147
+  of 147 with it off; both build trees gave no compiler warning. The first
+  full runs failed only `test_designer_ui` and `test_designer_ui_real`,
+  whose check of the part `aux` did not know `"popped"`; they passed after
+  that fix. `tools/vendor_layout.py` was run with `--write` first: the
+  copied Skribidi tree lacked patch 0010 (`test_layout` failed on it).
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on `main.cpp`, `ui.cpp`, the pane and the three
+  test files: no warning. emcc (`-fsyntax-only`, `-sUSE_SDL=3`) on
+  `main.cpp`, `ui.cpp` and the pane: no new warning (`run_progress()`
+  unused in a browser, as before).
+
+**Hand mutants** (each reverted):
+
+| Mutant | Result |
+|---|---|
+| p-01: no `NoAutoMerge` | fails GL 2c (no window of its own); the Test Engine's window is past the main one's edge there, so it gets its own anyway |
+| p-02: the OS's decorations not asked for | fails `preview/popout` (`--viewports`) |
+| p-03: the pane still holds the preview | fails `preview/popout`: the pane is gone |
+| p-04: the main window decides for the popped-out preview | fails `preview/popout`: the main window hidden |
+| p-05: its own window minimized does not pause it | fails `preview/popout` |
+| p-06: `"popped"` not written | fails `preview/popout`: popped out after the open |
+| p-07: the OS's close button ignored | fails `preview/popout` |
+| p-08: full screen with no window handle | fails `preview/popout` |
+| p-09: Pop out offered without viewports | fails `preview/popout` (no `--viewports`) |
+| p-10: no fence | survives: llvmpipe and the RX 6600 show the texture's bytes without it (the probe's finding) |
+| p-11: the other viewports not drawn | fails GL 2c: 1,584,000 bytes differ |
+| p-12: the window drawn after Pop in | fails `preview/popout` and three tests more |
+
+**What the user must check on the real display** (nothing here ran on
+it): the window's move, resize, maximize and close through the window
+manager; Full screen and Esc on a monitor of the RX 6600 (and which
+monitor it fills); tearing in the popped-out window (swap interval 0) and
+whether the main window's vsync still paces both; the frame interval with
+the preview popped out on a second monitor; the wheel and the middle drag
+in both windows; an IME composition in a field of the popped-out window;
+tooltips and combos near the main window's edge, which now become OS
+windows of their own (ImGui's note: SDL3's window animations can show).
+
 ## First version
 
 In:
@@ -4805,7 +5165,8 @@ test checks both.
 - Decision 6: at 1:1 the image draws with ImGui's nearest sampler (its
   draw callback), so the bytes are exact; at Fit, with ImGui's linear
   sampler. No mipmaps. Scaled, fine gratings alias, and the panel says
-  "Scaled: fine patterns alias; use 1:1".
+  "Scaled: fine patterns alias; use 1:1". Since 2026-11-23 the nearest
+  sampler also draws every whole zoom above 1 ("Preview size").
 - Rows: the texture is bottom-up (GL's order), so `ImGui::Image()` takes
   `uv0 = (0, 1)`, `uv1 = (1, 0)`.
 
@@ -6046,8 +6407,12 @@ ctest --test-dir build/designer -R test_designer_te
 
 - Tag `v1.93.0` of ocornut/imgui_test_engine, commit `16b6efbb393f`. The
   engine's author made this tag on 2026-10-14, the day of ImGui's
-  `v1.93.0`, which is the designer's ImGui (`c1aaac65`). ImGui did not
-  change.
+  `v1.93.0`, which was the designer's ImGui (`c1aaac65`). ImGui did not
+  change. Since 2026-11-23 the designer's ImGui is `v1.93.0-docking`
+  (`b916186e66aa`); the engine has one tag a release for both branches
+  and compiles its viewport and docking code there (`IMGUI_HAS_VIEWPORT`).
+  `test_designer_te --viewports` runs every test with ImGui's
+  multi-viewport on a mock platform ("Preview size (2026-11-23)").
 - 20 files: the 8 sources and 10 headers of `imgui_test_engine/`, its
   `LICENSE.txt`, and `thirdparty/Str/Str.h` (public domain).
 - Not taken: `stb_image_write` (screen capture is off), the engine's test

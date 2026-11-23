@@ -20,6 +20,8 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#else
+#include "gl_viewports.h"
 #endif
 
 namespace {
@@ -115,6 +117,18 @@ void SDLCALL run_progress(void*) {
 }
 
 void set_title(void*, const char* t) { SDL_SetWindowTitle(A.win, t); }
+
+#ifndef __EMSCRIPTEN__
+// The popped-out preview's window (2026-11-23): SDL3's ImGui backend keeps
+// the SDL_WindowID in ImGuiViewport::PlatformHandle. SDL's default full
+// screen is the desktop's mode, so the display's mode does not change.
+bool fullscreen(void*, void* handle, bool on) {
+    SDL_Window* w = SDL_GetWindowFromID((SDL_WindowID)(intptr_t)handle);
+    if (w && SDL_SetWindowFullscreen(w, on)) return true;
+    fprintf(stderr, "ysp_designer: the preview's window %s full screen: %s\n", on ? "did not go" : "did not leave", w ? SDL_GetError() : "no window");
+    return false;
+}
+#endif
 void quit(void*) { A.quit = true; }
 
 void handle(const SDL_Event& e) {
@@ -134,8 +148,11 @@ void handle(const SDL_Event& e) {
         dsg_redraw_event(&A.redraw);
         return;
     }
-    if (e.type == SDL_EVENT_WINDOW_MINIMIZED || e.type == SDL_EVENT_WINDOW_HIDDEN) ui_set_window_shown(false);
-    else if (e.type == SDL_EVENT_WINDOW_RESTORED || e.type == SDL_EVENT_WINDOW_SHOWN || e.type == SDL_EVENT_WINDOW_MAXIMIZED)
+    // The main window's own; the popped-out preview's window is a viewport,
+    // which ImGui's backend follows (ImGuiViewportFlags_IsMinimized).
+    const bool main_win = e.window.windowID == SDL_GetWindowID(A.win);
+    if (main_win && (e.type == SDL_EVENT_WINDOW_MINIMIZED || e.type == SDL_EVENT_WINDOW_HIDDEN)) ui_set_window_shown(false);
+    else if (main_win && (e.type == SDL_EVENT_WINDOW_RESTORED || e.type == SDL_EVENT_WINDOW_SHOWN || e.type == SDL_EVENT_WINDOW_MAXIMIZED))
         ui_set_window_shown(true);
     if (e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e.window.windowID == SDL_GetWindowID(A.win))) {
         if (ui_request_quit()) A.quit = true;
@@ -172,6 +189,15 @@ void draw_frame() {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 #ifndef __EMSCRIPTEN__
+    // The other viewports (the popped-out preview) on their own contexts,
+    // which share this one's textures; then this window's swap.
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        glvp::begin();
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+        SDL_GL_MakeCurrent(A.win, A.gl);
+        glvp::end();
+    }
     SDL_GL_SwapWindow(A.win);
 #endif
     dsg_redraw_drawn(&A.redraw);
@@ -233,8 +259,18 @@ int main(int argc, char** argv) {
     // a blinking caret is an animation: an idle window would draw twice a second
     io.ConfigInputTextCursorBlink = false;
     ImGui::StyleColorsDark();
+#ifndef __EMSCRIPTEN__
+    // ImGui's multi-viewport, for the preview's window of its own
+    // (2026-11-23). NewFrame() turns it off where the backend has none:
+    // SDL3's has it on X11, Windows and macOS, not on Wayland. Not in a
+    // browser: one canvas.
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+#endif
     ImGui_ImplSDL3_InitForOpenGL(A.win, A.gl);
     ImGui_ImplOpenGL3_Init("#version 300 es");
+#ifndef __EMSCRIPTEN__
+    glvp::install();
+#endif
 
     char font_dir[DSG_PATH_MAX];
 #ifdef __EMSCRIPTEN__
@@ -262,6 +298,7 @@ int main(int argc, char** argv) {
         plat.player_path = A.player;
     }
     plat.wake_run = run_progress;
+    plat.fullscreen = fullscreen;
 #endif
     // The first gfx, on this thread and the window's context, before
     // ui_init() starts the check thread: the sessions that the thread loads

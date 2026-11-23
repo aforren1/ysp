@@ -72,7 +72,12 @@ void dsg_preview_session_ops(const dsg_preview_gl* gl, dsg_session_ops* out);
 
 /* --- the settings: the view file's part "preview" --------------------------- */
 
-enum { DSG_PV_SCALE_FIT = 0, DSG_PV_SCALE_1TO1 = 1 };
+/* Fit: the largest scale that fits the pane, at most 1. 1:1: one
+ * participant px to one framebuffer px. Zoom (2026-11-23, "Preview size"):
+ * zoom framebuffer px per participant px, from the wheel. */
+enum { DSG_PV_SCALE_FIT = 0, DSG_PV_SCALE_1TO1 = 1, DSG_PV_SCALE_ZOOM = 2 };
+#define DSG_PV_ZOOM_MIN 0.125
+#define DSG_PV_ZOOM_MAX 16.0
 
 /* What the person chooses. session.out_dir is not a setting: the preview
  * fills it for each run. */
@@ -82,15 +87,20 @@ typedef struct dsg_preview_settings {
                                      * pin_row; -1 any), fields              */
     double speed;                   /* 0.25, 0.5, 1 or 2                      */
     int    scale;                   /* DSG_PV_SCALE_*                          */
+    double zoom;                    /* with DSG_PV_SCALE_ZOOM: DSG_PV_ZOOM_MIN
+                                     * to _MAX; 1 otherwise                   */
+    bool   details;                 /* the pane's details show below the
+                                     * display; false: the display takes
+                                     * their room                            */
 } dsg_preview_settings;
 
 /* 1920 x 1080 at 60 Hz, seed 1, "correct" at 0.3 s, no pin, no fields,
- * speed 1, Fit (decisions 1 and 6). */
+ * speed 1, Fit (decisions 1 and 6), zoom 1, the details shown. */
 void dsg_preview_settings_default(dsg_preview_settings* s);
 /* The view file's part "preview" (preview_part.c, part S): {"open": bool,
  * "display": [w, h], "hz": n, "speed": s, "seed": n, "participant": "...",
  * "rt_s": s, "pin": {"leaf": PATH, "row": n}, "fields": {NAME: "VALUE"},
- * "scale": "fit" or "1:1", "rig": NAME (step 6; "": the built-in rig)}. A key that is missing, of another type or out of
+ * "scale": "fit", "1:1" or "zoom", "zoom": z, "details": bool, "rig": NAME (step 6; "": the built-in rig)}. A key that is missing, of another type or out of
  * range takes its default, and so does every key when the part is missing
  * or does not parse. open: the pane is shown. */
 void dsg_preview_part_read(const dsg_view* v, dsg_preview_settings* s, bool* open);
@@ -153,7 +163,7 @@ void dsg_preview_step(dsg_preview* pv);
 /* A session job with the same settings now, without the settle. */
 void dsg_preview_restart(dsg_preview* pv);
 /* New settings. A change of the display, seed, participant, rt, pin or
- * fields restarts; speed and scale take effect at once. Step 6: a change of
+ * fields restarts; speed, scale, zoom and details take effect at once. Step 6: a change of
  * session.rig restarts too (part G, in preview.c's same_settings()). */
 void dsg_preview_set(dsg_preview* pv, const dsg_preview_settings* s);
 void dsg_preview_get(const dsg_preview* pv, dsg_preview_settings* out);

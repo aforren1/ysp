@@ -349,6 +349,10 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     endif()
     add_test(NAME test_designer_te COMMAND test_designer_te ${CMAKE_CURRENT_BINARY_DIR}/designer_te_work)
     set_tests_properties(test_designer_te PROPERTIES TIMEOUT 120)
+    # Every test again with ImGui's multi-viewport on a mock platform
+    # (2026-11-23, docs/designer.md, "Preview size").
+    add_test(NAME test_designer_te_viewports COMMAND test_designer_te ${CMAKE_CURRENT_BINARY_DIR}/designer_te_vp_work "" --viewports)
+    set_tests_properties(test_designer_te_viewports PROPERTIES TIMEOUT 120)
     dsg_test(test_designer_te)
 endif()
 

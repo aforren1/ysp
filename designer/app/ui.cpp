@@ -15,6 +15,7 @@
 #include "imgui_internal.h"
 
 #include "skribidi/skb_layout.h"
+#include "ysp/json.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -39,6 +40,13 @@ const int kTextView = -1;
 // S->selected for the preview's issue, which is not in the check's report.
 const int kPreviewIssue = -2;
 
+// The AUX pane's width: a share of the room that the side column leaves, so
+// it follows the window's size. The splitter sets it, and the view file's
+// part "aux" keeps it; a share out of the bounds reads as the default.
+const float kAuxShare = 0.45f, kAuxShareMin = 0.15f, kAuxShareMax = 0.85f;
+// In points: the pane's least width, and what the main view keeps.
+const float kAuxMinW = 320.0f, kMainMinW = 240.0f;
+
 struct State {
     UiPlatform plat = {};
     dsg_project proj = {};
@@ -47,6 +55,15 @@ struct State {
     dsg_preview_gl gl = {};          // read by the check thread: fixed at ui_init()
     dsg_preview* pv = nullptr;       // the preview (preview.h)
     bool aux_on[kMaxViews] = {};     // each AUX view's check box
+    float aux_share = kAuxShare;     // the view file's part "aux"
+    // The preview in an OS window of its own (2026-11-23, "Preview size"):
+    // ImGui's multi-viewport. popped is kept in the part "aux".
+    bool popped = false;
+    bool pop_place = false;          // place the window at the next frame
+    ImVec2 pane_pos = ImVec2(0, 0), pane_size = ImVec2(0, 0);   // the AUX pane, last drawn
+    bool popped_shown = true;        // its OS window is not minimized
+    void* popped_handle = nullptr;   // ImGuiViewport::PlatformHandle of it
+    bool popped_fs = false;          // full screen
     bool window_shown = true;
     int64_t now = 0;                 // the UI's clock this frame
     dsg_preview_where where = {};    // ui_preview_where()'s
@@ -211,6 +228,32 @@ const char* main_id() {
     return S->main_view >= 0 && S->main_view < nv ? v[S->main_view]->id : "text";
 }
 
+// The part "aux": {"width": share, "popped": bool}. Missing, of another
+// type or out of the bounds: the default (0.45, in the pane).
+void read_aux_part(const dsg_view* v) {
+    S->aux_share = kAuxShare;
+    S->popped = false;
+    S->popped_fs = false;
+    size_t n = 0;
+    const char* json = dsg_view_part_get(v, "aux", &n);
+    if (!json) return;
+    yjs_arena a;
+    yjs_arena_init_heap(&a, (size_t)1 << 16);
+    yjs_value* root = nullptr;
+    yjs_error e;
+    memset(&e, 0, sizeof e);
+    double w = 0;
+    bool pop = false;
+    if (yjs_parse(&a, json, n, nullptr, &root, &e) == YJS_OK && root && root->type == YJS_OBJECT) {
+        if (yjs_double(yjs_get(root, "width"), &w) == YJS_OK && w >= (double)kAuxShareMin && w <= (double)kAuxShareMax) S->aux_share = (float)w;
+        if (yjs_bool(yjs_get(root, "popped"), &pop) == YJS_OK && pop) {
+            S->popped = true;
+            S->pop_place = true;
+        }
+    }
+    yjs_arena_free(&a);
+}
+
 void write_view() {
     if (!S->open) return;
     int nv;
@@ -222,6 +265,10 @@ void write_view() {
     if (dsg_preview_part_write(&S->proj.view, &ps, aux_view_on("preview")))
         set_status("The preview's view state was not kept: the view file is full.");
     if (dsg_run_part_write(&S->proj.view, &S->run_set, aux_view_on("run"))) set_status("The Run view's settings were not kept: the view file is full.");
+    char aux_part[64];
+    const int an = snprintf(aux_part, sizeof aux_part, "{\"popped\":%s,\"width\":%.4f}", S->popped ? "true" : "false", (double)S->aux_share);
+    if (an <= 0 || dsg_view_part_set(&S->proj.view, "aux", aux_part, (size_t)an))
+        set_status("The AUX pane's width was not kept: the view file is full.");
     // a shallow copy: the parts stay the project's, the ImGui text is ImGui's
     dsg_view w = S->proj.view;
     caret_line_col(&w.caret_line, &w.caret_column);
@@ -325,6 +372,7 @@ void open_now(const char* path) {
     aux = false;
     dsg_run_part_read(&S->proj.view, &S->run_set, &aux);
     set_aux_view("run", aux);
+    read_aux_part(&S->proj.view);
     look_rig_default(true);
     if (S->proj.view.selection[0]) {
         dsg_sel s;
@@ -489,7 +537,59 @@ void take_session() {
 }
 
 // The preview's pane shows: the preview runs only then.
-bool aux_shown() { return S->open && aux_view_on("preview") && S->window_shown && !S->preview_held; }
+// The popped-out preview's own window decides whether it shows; the main
+// window decides for the AUX pane.
+bool can_pop();
+bool preview_window_shown() { return S->popped && can_pop() ? S->popped_shown : S->window_shown; }
+
+bool aux_shown() { return S->open && aux_view_on("preview") && preview_window_shown() && !S->preview_held; }
+
+// ImGui makes OS windows for viewports now: the platform and the renderer
+// have them, and main.cpp enabled them (NewFrame() clears the flag when a
+// backend cannot, as SDL3's on Wayland).
+bool can_pop() {
+#ifdef IMGUI_HAS_VIEWPORT
+    return (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0;
+#else
+    return false;
+#endif
+}
+
+// The preview's window of its own: a top-level ImGui window that never
+// merges into the main viewport, with the OS's decorations (move, resize,
+// close) and a task bar entry. Its close button pops the preview back in.
+void popped_window(const UiView* pv_view) {
+#ifdef IMGUI_HAS_VIEWPORT
+    ImGuiWindowClass wc;
+    wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    wc.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration | ImGuiViewportFlags_NoTaskBarIcon;
+    ImGui::SetNextWindowClass(&wc);
+    if (S->pop_place) {
+        // where the pane was, at least 960 x 640, so the display grows
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        const ImVec2 at = S->pane_size.x > 0 ? S->pane_pos : ImVec2(mv->Pos.x + 40, mv->Pos.y + 40);
+        ImGui::SetNextWindowPos(at);
+        ImGui::SetNextWindowSize(ImVec2(ImMax(S->pane_size.x, 960.0f), ImMax(S->pane_size.y, 640.0f)));
+        S->pop_place = false;
+    }
+    bool open = true;
+    ImGui::Begin("Preview##window", &open,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
+    const ImGuiViewport* vp = ImGui::GetWindowViewport();
+    S->popped_handle = vp && vp != ImGui::GetMainViewport() ? vp->PlatformHandle : nullptr;
+    S->popped_shown = !vp || !(vp->Flags & ImGuiViewportFlags_IsMinimized);
+    if (S->open) pv_view->draw();
+    else ImGui::TextUnformatted("No project is open.");
+    // Escape leaves full screen when the session does not hold the keys
+    if (S->popped_fs && !dsg_preview_keyboard(S->pv) && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        ui_preview_set_fullscreen(false);
+    ImGui::End();
+    if (!open) ui_preview_pop(false);
+#else
+    (void)pv_view;
+#endif
+}
 
 // --- Build and Run (step 6) ------------------------------------------------
 
@@ -1212,18 +1312,23 @@ void ui_frame() {
     int nv;
     const UiView* const* v = views(&nv);
     bool side = false;
-    int n_aux = 0;   // the AUX views whose check box is ticked
+    int n_aux = 0;   // the AUX views whose check box is ticked, in the pane
+    // the preview out of the pane when it pops out and the platform can
+    const bool popped = S->popped && can_pop();
+    const int pv_i = aux_index("preview");
     for (int i = 0; i < nv; i++) {
         side = side || v[i]->slot == UI_SLOT_SIDE;
-        n_aux += v[i]->slot == UI_SLOT_AUX && S->aux_on[i];
+        n_aux += v[i]->slot == UI_SLOT_AUX && S->aux_on[i] && !(popped && i == pv_i);
     }
     const bool aux = n_aux > 0;
     const float sp = ImGui::GetStyle().ItemSpacing.x;
     const float avail_w = ImGui::GetContentRegionAvail().x;
     const float issues_h = ImMax(120.0f, ImGui::GetContentRegionAvail().y * 0.3f);
     const float side_w = side ? ImMax(280.0f, avail_w * 0.3f) : 0.0f;
-    // the preview at Fit wants room; the main view keeps at least a third
-    const float aux_w = aux ? ImMax(320.0f, (avail_w - side_w) * 0.45f) : 0.0f;
+    // The AUX pane: its share of what the side column leaves, at least
+    // kAuxMinW, and the main view keeps kMainMinW when there is room.
+    const float aux_room = avail_w - side_w;
+    const float aux_w = aux ? ImMax(kAuxMinW, ImMin(S->aux_share * aux_room, aux_room - kMainMinW)) : 0.0f;
     const float main_w = -((side ? side_w + sp : 0.0f) + (aux ? aux_w + sp : 0.0f));
 
     // The text view keeps the skeleton's child name, so its tests' paths hold.
@@ -1237,13 +1342,33 @@ void ui_frame() {
     }
     ImGui::EndChild();
     if (aux) {
+        // The splitter fills the spacing between the main view and the pane
+        // (2026-11-23): a drag sets the pane's share of the room.
+        ImGui::SameLine(0, 0);
+        const ImVec2 sp0 = ImGui::GetCursorScreenPos();
+        const float split_h = ImMax(ImGui::GetContentRegionAvail().y - issues_h, 1.0f);
+        ImGui::InvisibleButton("##aux_split", ImVec2(sp, split_h));
+        if (ImGui::IsItemActive() && ImGui::GetIO().MouseDelta.x != 0 && aux_room > 0) {
+            const float w = ImMax(kAuxMinW, ImMin(aux_w - ImGui::GetIO().MouseDelta.x, aux_room - kMainMinW));
+            S->aux_share = ImClamp(w / aux_room, kAuxShareMin, kAuxShareMax);
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(sp0.x + sp * 0.5f - 1.0f, sp0.y), ImVec2(sp0.x + sp * 0.5f + 1.0f, sp0.y + split_h),
+                                                      ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_SeparatorActive : ImGuiCol_SeparatorHovered));
+        }
+        ImGui::SetItemTooltip("Drag to change the pane's width");
         // AUX views are children of the main window too: "//##designer/LABEL".
-        ImGui::SameLine();
+        ImGui::SameLine(0, 0);
         ImGui::BeginGroup();
         const float h = (ImGui::GetContentRegionAvail().y - issues_h - ImGui::GetStyle().ItemSpacing.y * (float)(n_aux - 1)) / (float)n_aux;
         for (int i = 0; i < nv; i++) {
-            if (v[i]->slot != UI_SLOT_AUX || !S->aux_on[i]) continue;
+            if (v[i]->slot != UI_SLOT_AUX || !S->aux_on[i] || (popped && i == pv_i)) continue;
             ImGui::BeginChild(v[i]->label, ImVec2(aux_w, ImMax(h, 40.0f)), ImGuiChildFlags_Borders);
+            if (i == pv_i) {
+                S->pane_pos = ImGui::GetWindowPos();
+                S->pane_size = ImGui::GetWindowSize();
+            }
             if (S->open) v[i]->draw();
             else ImGui::TextUnformatted("No project is open.");
             ImGui::EndChild();
@@ -1279,6 +1404,12 @@ void ui_frame() {
     run_modal();
     unsaved_modal();
     ImGui::End();
+    if (popped && pv_i >= 0 && S->aux_on[pv_i]) {
+        popped_window(v[pv_i]);
+    } else {
+        S->popped_shown = true;
+        S->popped_handle = nullptr;
+    }
     // after the views: an edit in this frame's draw shows in this title
     refresh_dirty();
     update_title();
@@ -1299,7 +1430,9 @@ bool ui_animating() {
     const UiView* const* v = views(&nv);
     for (int i = 0; i < nv; i++) {
         // a hidden view does not animate (the preview pauses there)
-        if (v[i]->slot == UI_SLOT_AUX && !(S->open && S->aux_on[i] && S->window_shown)) continue;
+        if (v[i]->slot == UI_SLOT_AUX &&
+            !(S->open && S->aux_on[i] && (strcmp(v[i]->id, "preview") == 0 ? preview_window_shown() : S->window_shown)))
+            continue;
         if (v[i]->animating && v[i]->animating()) return true;
     }
     return false;
@@ -1400,6 +1533,26 @@ const dsg_preview_where* ui_preview_where() {
 }
 
 bool ui_aux_open() { return aux_view_on("preview"); }
+
+bool ui_preview_can_pop() { return S && can_pop(); }
+bool ui_preview_popped() { return S && S->popped && can_pop(); }
+
+void ui_preview_pop(bool out) {
+    if (!S || S->popped == out) return;
+    if (!out && S->popped_fs) ui_preview_set_fullscreen(false);
+    S->popped = out;
+    S->pop_place = out;
+    S->popped_fs = false;
+}
+
+bool ui_preview_fullscreen() { return S && S->popped && S->popped_fs; }
+
+bool ui_preview_set_fullscreen(bool on) {
+    if (!S || !S->popped || !S->popped_handle || !S->plat.fullscreen) return false;
+    if (!S->plat.fullscreen(S->plat.ctx, S->popped_handle, on)) return false;
+    S->popped_fs = on;
+    return true;
+}
 
 void ui_show_aux(bool open) { set_aux_view("preview", open); }
 
