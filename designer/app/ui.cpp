@@ -8,6 +8,7 @@
 // Everything that needs no ImGui is in designer/core.
 #include "ui.h"
 #include "views.h"
+#include "flow.h"
 #include "skf.h"
 #include "skt.h"
 
@@ -46,6 +47,9 @@ const int kPreviewIssue = -2;
 const float kAuxShare = 0.45f, kAuxShareMin = 0.15f, kAuxShareMax = 0.85f;
 // In points: the pane's least width, and what the main view keeps.
 const float kAuxMinW = 320.0f, kMainMinW = 240.0f;
+// The path field's least width in the toolbar: below it, the path's row
+// wraps (docs/designer.md, "Rows that wrap").
+const float kPathMinW = 200.0f;
 
 struct State {
     UiPlatform plat = {};
@@ -573,8 +577,10 @@ void popped_window(const UiView* pv_view) {
         S->pop_place = false;
     }
     bool open = true;
+    // the scroll bar always, as the pane's
     ImGui::Begin("Preview##window", &open,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                     ImGuiWindowFlags_AlwaysVerticalScrollbar);
     const ImGuiViewport* vp = ImGui::GetWindowViewport();
     S->popped_handle = vp && vp != ImGui::GetMainViewport() ? vp->PlatformHandle : nullptr;
     S->popped_shown = !vp || !(vp->Flags & ImGuiViewportFlags_IsMinimized);
@@ -821,20 +827,20 @@ void redo() {
 
 void toolbar() {
     if (ImGui::Button("New")) ask_or_run(PENDING_NEW, S->path);
-    ImGui::SameLine();
+    flow_next(flow_button_w("Open..."));
     if (ImGui::Button("Open...")) {
         if (!S->plat.pick_folder || !S->plat.pick_folder(S->plat.ctx)) ui_dialog_failed("no folder dialog on this platform");
     }
-    ImGui::SameLine();
+    flow_next(flow_button_w("Save"));
     ImGui::BeginDisabled(!S->open);
     if (ImGui::Button("Save")) ui_save();
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_next(flow_button_w("Undo"));
     ImGui::BeginDisabled(!dsg_doc_can_undo(S->doc));
     if (ImGui::Button("Undo")) undo();
     ImGui::SetItemTooltip("%s", dsg_doc_undo_label(S->doc));
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_next(flow_button_w("Redo"));
     ImGui::BeginDisabled(!dsg_doc_can_redo(S->doc));
     if (ImGui::Button("Redo")) redo();
     ImGui::SetItemTooltip("%s", dsg_doc_redo_label(S->doc));
@@ -844,14 +850,14 @@ void toolbar() {
     // "//##designer/Run". Not in a browser (decision 16).
     ImGui::PushID("tool");
     const char* why = build_refusal();
-    ImGui::SameLine();
+    flow_next(flow_button_w("Build"));
     ImGui::BeginDisabled(why != nullptr);
     if (ImGui::Button("Build")) ui_build();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", why ? why : "Save, then build the pack into the project's build folder");
     why = run_refusal();
-    ImGui::SameLine();
+    flow_next(flow_button_w("Run"));
     ImGui::BeginDisabled(why != nullptr);
     if (ImGui::Button("Run")) ui_run_start();
     ImGui::EndDisabled();
@@ -860,11 +866,11 @@ void toolbar() {
     if (run_going()) {
         dsg_run_info in = {};
         dsg_run_get_info(S->run, &in);
-        ImGui::SameLine();
+        flow_next(flow_button_w("Stop"));
         if (ImGui::Button("Stop")) ui_run_stop();
         ImGui::SetItemTooltip("Ask the player to stop: it closes the data set");
         if (in.kill_offered) {
-            ImGui::SameLine();
+            flow_next(flow_button_w("Kill"));
             if (ImGui::Button("Kill")) ui_run_kill();
             ImGui::SetItemTooltip("End the player now. Its data set is not closed, and the display's mode and gamma ramp may stay changed");
         }
@@ -878,19 +884,23 @@ void toolbar() {
     ImGui::PushID("aux");
     for (int i = 0; i < nv; i++) {
         if (v[i]->slot != UI_SLOT_AUX) continue;
-        ImGui::SameLine();
+        flow_next(flow_check_w(v[i]->label));
         ImGui::Checkbox(v[i]->label, &S->aux_on[i]);
         ImGui::SetItemTooltip("Show the %s view beside the main view", v[i]->label);
     }
     ImGui::PopID();
-    ImGui::SameLine();
+    // The path, its field and Open path stay on one row; the field takes
+    // what the row leaves, at least kPathMinW, else the three start a row.
+    const float sp = ImGui::GetStyle().ItemSpacing.x, open_w = flow_button_w("Open path");
+    flow_next(flow_text_w("Path") + sp + kPathMinW + sp + open_w);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Path");
     ImGui::SameLine();
     if (S->focus_path) {
         ImGui::SetKeyboardFocusHere();
         S->focus_path = false;
     }
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Open path").x - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SetNextItemWidth(-(open_w + sp));
     const bool enter = ImGui::InputTextWithHint("##path", "a project folder, or its pack.json", S->path, sizeof S->path,
                                                 ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
@@ -907,7 +917,7 @@ void view_switch() {
     if (ImGui::RadioButton("Text", S->main_view == kTextView)) S->main_view = kTextView;
     for (int i = 0; i < nv; i++) {
         if (v[i]->slot != UI_SLOT_MAIN) continue;
-        ImGui::SameLine();
+        flow_next(flow_check_w(v[i]->label));
         if (ImGui::RadioButton(v[i]->label, S->main_view == i)) S->main_view = i;
     }
     ImGui::PopID();
@@ -1364,7 +1374,12 @@ void ui_frame() {
         const float h = (ImGui::GetContentRegionAvail().y - issues_h - ImGui::GetStyle().ItemSpacing.y * (float)(n_aux - 1)) / (float)n_aux;
         for (int i = 0; i < nv; i++) {
             if (v[i]->slot != UI_SLOT_AUX || !S->aux_on[i] || (popped && i == pv_i)) continue;
-            ImGui::BeginChild(v[i]->label, ImVec2(aux_w, ImMax(h, 40.0f)), ImGuiChildFlags_Borders);
+            // The preview's scroll bar always shows: a stale banner can make
+            // its content overflow, and a scroll bar that came then would
+            // narrow the rows, wrap them again and rescale the display (the
+            // fixed rows rule; "Rows that wrap").
+            ImGui::BeginChild(v[i]->label, ImVec2(aux_w, ImMax(h, 40.0f)), ImGuiChildFlags_Borders,
+                              i == pv_i ? ImGuiWindowFlags_AlwaysVerticalScrollbar : 0);
             if (i == pv_i) {
                 S->pane_pos = ImGui::GetWindowPos();
                 S->pane_size = ImGui::GetWindowSize();

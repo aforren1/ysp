@@ -17,6 +17,12 @@
 //   preview/steady        At Fit, the display keeps its size while rows
 //                         above it come and go: the last trial's row and
 //                         the stale banner (hand test, 2026-11-21).
+//   preview/steady_wrap   In panes from 320 points wide up, where the where
+//                         rows wrap, the display keeps its size and place
+//                         from the first trial to one with a response
+//                         (2026-11-23, "Rows that wrap"). A long template
+//                         name puts the wrap of a naive flow inside the
+//                         widths swept.
 //   preview/zoom          The wheel over the display zooms about the
 //                         cursor, step by step to a whole zoom; a middle
 //                         drag pans and claims no keyboard; the cursor's
@@ -90,10 +96,33 @@ dsg_preview_info info() {
 
 // A copy of rdk, opened, with the pane shown and the session running. space
 // true: its choices are Space and the right arrow, so Space is a response.
-bool start(ImGuiTestContext* ctx, const char* copy, bool space) {
+// long_name true: the template is named rdk_template_with_a_long_name, so
+// the where rows' first row is longer (preview/steady_wrap).
+bool start(ImGuiTestContext* ctx, const char* copy, bool space, bool long_name = false) {
     static const char* const files[] = { "pack.json", "experiment.json", "conditions.csv", nullptr };
     char dir[DSG_PATH_MAX], path[DSG_PATH_MAX], err[256];
     if (!te_copy_project("rdk", copy, files, dir, sizeof dir)) return false;
+    if (long_name) {
+        char* d = nullptr;
+        size_t n = 0;
+        if (dsg_join(path, sizeof path, dir, "experiment.json") || dsg_read_file(path, &d, &n, err, sizeof err)) return false;
+        ImGuiTextBuffer t;
+        const char* at = d;
+        static const char* const from[] = { "\"rdk\": {", "\"trial\": \"rdk\"" };
+        static const char* const to[] = { "\"rdk_template_with_a_long_name\": {", "\"trial\": \"rdk_template_with_a_long_name\"" };
+        int done = 0;
+        for (int k = 0; k < 2; k++) {
+            const char* f = strstr(at, from[k]);
+            if (!f) break;
+            t.append(at, f);
+            t.append(to[k]);
+            at = f + strlen(from[k]);
+            done++;
+        }
+        t.append(at, d + n);
+        free(d);
+        if (done != 2 || dsg_write_file(path, t.c_str(), (size_t)t.size(), err, sizeof err)) return false;
+    }
     if (space) {
         char* d = nullptr;
         size_t n = 0;
@@ -298,6 +327,108 @@ void test_stale(ImGuiTestContext* ctx) {
 ImVec2 screen_size(ImGuiTestContext* ctx) {
     const ImGuiTestItemInfo it = ctx->ItemInfo(ctx->GetID("##screen", ctx->WindowInfo(kDisplay).ID));
     return it.ID ? it.RectFull.GetSize() : ImVec2(0, 0);
+}
+
+dsg_preview_settings settings();
+ImGuiWindow* win(ImGuiTestContext* ctx, const char* path);
+
+// Rows that wrap (2026-11-23): the display's rect at pane widths from 320
+// points up in steps of about 3, set through the main window's width (the
+// pane takes 0.45 of what the side column leaves). Not through the
+// splitter: a drag takes about 10 frames, and the engine's watchdog ends a
+// test after 1800.
+const int kSweep = 100;
+void sweep(ImGuiTestContext* ctx, ImRect* rect, float* pane_w) {
+    const ImGuiID disp = ctx->WindowInfo(kDisplay).ID;
+    for (int k = 0; k < kSweep; k++) {
+        ImGui::GetIO().DisplaySize.x = 1000.0f + 10.0f * (float)k;
+        ctx->Yield();
+        rect[k] = ctx->ItemInfo(ctx->GetID("##screen", disp)).RectFull;
+        ImGuiWindow* pane = win(ctx, kPane);
+        pane_w[k] = pane ? pane->Size.x : 0.0f;
+    }
+}
+
+// The main window's size put back however the test ends.
+struct KeepSize {
+    ImVec2 size = ImGui::GetIO().DisplaySize;
+    ~KeepSize() { ImGui::GetIO().DisplaySize = size; }
+};
+
+// The where rows wrap by the pane's width only. With the details folded and
+// a display that Fit bounds by its height, at each width of the sweep the
+// display keeps its size and place from the first trial (no last trial) to
+// one with a last trial, a response and an rt, and the frame count from
+// two digits to three or more. Then the stale banner moves it down at the
+// same size at each width.
+void test_steady_wrap(ImGuiTestContext* ctx) {
+    Double dbl;
+    KeepSize keep;
+    IM_CHECK(start(ctx, "preview_steady_wrap", false, true));
+    char run0[DSG_PATH_MAX];
+    snprintf(run0, sizeof run0, "%s", info().out_dir);
+    dsg_preview_settings s = settings();
+    s.session.width = 600;
+    s.session.height = 1200;
+    dsg_preview_set(ui_preview(), &s);
+    dsg_preview_where w = {};
+    for (int i = 0; i < 240 && !(strcmp(info().out_dir, run0) != 0 && dsg_preview_where_now(ui_preview(), &w) && !w.outcome); i++)
+        ctx->Yield();
+    IM_CHECK(w.outcome == nullptr);
+    IM_CHECK_LT(w.frame, 100);
+    IM_CHECK_EQ(info().height, 1200);
+    if (settings().details) ctx->ItemClick(te_in_child(ctx, kPane, "Details"));
+    IM_CHECK(!settings().details);
+    ctx->ItemClick(te_in_child(ctx, kPane, "Pause"));
+    IM_CHECK_EQ(info().status, (int)DSG_PV_PAUSED);
+    ImRect a[kSweep], b[kSweep];
+    float wa[kSweep], wb[kSweep];
+    // the same status line in each sweep: its rows set the pane's height
+    ui_set_status("Rows that wrap.");
+    sweep(ctx, a, wa);
+    IM_CHECK_LE(wa[0], 321.0f);
+    IM_CHECK_GE(wa[kSweep - 1], 600.0f);
+    ctx->ItemClick(te_in_child(ctx, kPane, "Run"));
+    // a response through the choice strip, below the display
+    to_response(ctx);
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &w));
+    const int trial0 = w.trial;
+    ctx->ItemClick(te_in_child(ctx, kPane, "$$1/##choice"));
+    IM_CHECK_STR_EQ(last_response(ctx, trial0), "right");
+    ctx->ItemClick(te_in_child(ctx, kPane, "Pause"));
+    IM_CHECK(dsg_preview_where_now(ui_preview(), &w));
+    IM_CHECK(w.outcome != nullptr && w.response != nullptr && w.response[0]);
+    IM_CHECK_GE(w.frame, 100);
+    ui_set_status("Rows that wrap.");
+    sweep(ctx, b, wb);
+    int moved = 0;
+    for (int k = 0; k < kSweep; k++) {
+        IM_CHECK_EQ(wa[k], wb[k]);
+        if (a[k].Min.x == b[k].Min.x && a[k].Min.y == b[k].Min.y && a[k].GetHeight() == b[k].GetHeight()) continue;
+        printf("te_preview: a pane %.0f wide: the display at (%.1f, %.1f) %.1f high, then (%.1f, %.1f) %.1f high\n", (double)wa[k],
+               (double)a[k].Min.x, (double)a[k].Min.y, (double)a[k].GetHeight(), (double)b[k].Min.x, (double)b[k].Min.y,
+               (double)b[k].GetHeight());
+        moved++;
+    }
+    IM_CHECK_EQ(moved, 0);
+    // The stale banner, which comes and goes, moves the display down at the
+    // same size, though the pane's content may now need its scroll bar.
+    ctx->ItemClick(te_in_child(ctx, "//##designer/Definition", "##definition"));
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_End);
+    ctx->KeyChars("x");
+    for (int i = 0; i < 60 && !info().stale; i++) ctx->Yield();
+    IM_CHECK(info().stale);
+    ui_set_status("Rows that wrap.");
+    sweep(ctx, a, wa);
+    for (int k = 0; k < kSweep; k++) {
+        IM_CHECK_EQ(wa[k], wb[k]);
+        if (a[k].Min.x == b[k].Min.x && a[k].GetHeight() == b[k].GetHeight()) continue;
+        printf("te_preview: a pane %.0f wide, stale: the display %.1f high at x %.1f, not %.1f at %.1f\n", (double)wa[k],
+               (double)a[k].GetHeight(), (double)a[k].Min.x, (double)b[k].GetHeight(), (double)b[k].Min.x);
+        moved++;
+    }
+    IM_CHECK_EQ(moved, 0);
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
 }
 
 void test_steady(ImGuiTestContext* ctx) {
@@ -687,6 +818,7 @@ void te_register_preview(ImGuiTestEngine* e) {
     IM_REGISTER_TEST(e, "preview", "choice")->TestFunc = test_choice;
     IM_REGISTER_TEST(e, "preview", "stale")->TestFunc = test_stale;
     IM_REGISTER_TEST(e, "preview", "steady")->TestFunc = test_steady;
+    IM_REGISTER_TEST(e, "preview", "steady_wrap")->TestFunc = test_steady_wrap;
     IM_REGISTER_TEST(e, "preview", "zoom")->TestFunc = test_zoom;
     IM_REGISTER_TEST(e, "preview", "split")->TestFunc = test_split;
     IM_REGISTER_TEST(e, "preview", "details")->TestFunc = test_details;

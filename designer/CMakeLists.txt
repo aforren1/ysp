@@ -224,7 +224,7 @@ set_target_properties(ysp_designer_skb PROPERTIES C_STANDARD 17 C_STANDARD_REQUI
 # compiler and no C++ runtime (docs/imgui_probe.md, finding 6).
 set(_ui_sources app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
     app/views.h app/views.cpp app/view_chart.cpp app/view_tables.h app/view_tables.cpp app/view_panels.cpp
-    app/view_preview.cpp app/view_run.cpp
+    app/view_preview.cpp app/view_run.cpp app/flow.h
     ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp)
 add_library(ysp_designer_ui STATIC ${_ui_sources})
 target_include_directories(ysp_designer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
@@ -334,6 +334,8 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
         # Step 6: run/* on parts B, R and G, with R's fake_player as the
         # player (run_view_double.c, part V's stand-in, is not built).
         ${_te_config}/te_run.cpp
+        # 2026-11-23: rows that wrap (docs/designer.md, "Rows that wrap").
+        ${_te_config}/te_wrap.cpp
         ${_ui_sources})
     target_compile_definitions(test_designer_te PRIVATE YSP_TE_FAKE_PLAYER="$<TARGET_FILE:fake_player>")
     add_dependencies(test_designer_te fake_player)

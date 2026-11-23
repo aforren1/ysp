@@ -12,6 +12,7 @@
 // chart shows the template that the preview runs) and "Preview this
 // template" (the pin). The place comes through view_chart.h's hooks.
 #include "views.h"
+#include "flow.h"
 #include "view_chart.h"
 #include "chart.h"
 #include "skf.h"
@@ -544,7 +545,8 @@ void draw_nodes(ImDrawList* dl, const Xf& xf, int sel_state, int hovered) {
 
 void template_combo(const yjs_value* trials) {
     const float row = ImGui::GetFrameHeight();
-    ImGui::SetNextItemWidth(220);
+    // narrower in a main view of less than 220 points, so it is not clipped
+    ImGui::SetNextItemWidth(ImMin(220.0f, ImMax(ImGui::GetContentRegionAvail().x, 60.0f)));
     if (ImGui::BeginCombo("##template", "")) {
         for (uint32_t i = 0; i < trials->n; i++) {
             const char* name = trial_name(trials, i);
@@ -587,10 +589,10 @@ void banner(ImU32 bg, const char* text) {
 }
 
 void preview_controls() {
-    ImGui::SameLine();
+    flow_next(flow_check_w("Follow"));
     ImGui::Checkbox("Follow", &C->view.follow);
     ImGui::SetItemTooltip("Show the template that the preview runs");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Preview this template"));
     if (ImGui::Button("Preview this template") && C->act.kind == ACT_NONE) {
         C->act.kind = ACT_PIN;
         snprintf(C->act.text, sizeof C->act.text, "%s", C->tmpl);
@@ -602,8 +604,11 @@ void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel
     template_combo(trials);
     preview_controls();
     const bool edit = editable(stale);
-    ImGui::SameLine();
     if (C->renaming >= 0 && C->rename) {
+        // the name, its field, OK and Cancel stay on one row
+        const float sp = ImGui::GetStyle().ItemSpacing.x;
+        flow_next(flow_text_w("Name") + sp + 220.0f + sp + flow_button_w("OK") + sp + flow_button_w("Cancel"));
+        ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Name");
         ImGui::SameLine();
         skf_draw("##rename", C->rename, 220, ImGui::GetFrameHeight());
@@ -621,6 +626,7 @@ void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel
             end_rename();
         }
     } else {
+        flow_next(flow_button_w("Add state"));
         ImGui::BeginDisabled(!edit);
         if (ImGui::Button("Add state") && C->act.kind == ACT_NONE) {
             Xf xf = { ImVec2(0, 0), 1 };
@@ -633,17 +639,17 @@ void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel
         }
         ImGui::SetItemTooltip("A new state, at the middle of the chart");
         ImGui::BeginDisabled(sel_state < 0);
-        ImGui::SameLine();
+        flow_next(flow_button_w("Rename"));
         if (ImGui::Button("Rename")) start_rename(sel_state);
         ImGui::SetItemTooltip("Rename the state and every name that refers to it (F2, or a double click)");
-        ImGui::SameLine();
+        flow_next(flow_button_w("Set first"));
         if (ImGui::Button("Set first") && C->act.kind == ACT_NONE) {
             C->act.kind = ACT_FIRST;
             C->act.state = sel_state;
         }
         ImGui::SetItemTooltip("Move the state to the head of the list: the trial starts there");
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow_next(flow_button_w("Delete"));
         ImGui::BeginDisabled(sel_state < 0 && !sel_edge[0]);
         if (ImGui::Button("Delete") && C->act.kind == ACT_NONE) {
             C->act.kind = sel_state >= 0 ? ACT_DELETE_STATE : ACT_DELETE_EXIT;
@@ -654,9 +660,11 @@ void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel
         ImGui::EndDisabled();
         ImGui::EndDisabled();
     }
-    ImGui::SameLine();
     const dsg_chart_tview* t = dsg_chart_view_template(&C->view, C->tmpl, false);
-    ImGui::TextDisabled("%.0f %%", (t ? t->zoom : 1.0f) * 100.0f);
+    char zoom[16];
+    snprintf(zoom, sizeof zoom, "%.0f %%", (double)(t ? t->zoom : 1.0f) * 100.0);
+    flow_next(flow_text_w(zoom));
+    ImGui::TextDisabled("%s", zoom);
     if (stale) banner(kBannerStale, "The text does not parse. The chart shows the last text that parsed, read-only.");
     else if (C->have_model && !C->model.has_states)
         banner(kBannerEvents, "Read-only: this template uses events, not states. The chart shows its parts, split at each until. To edit it, use the text view.");

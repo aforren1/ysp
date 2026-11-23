@@ -28,6 +28,8 @@
 //                        collapsed.
 //   preview/*            the preview's pane (te_preview.cpp, step 5 part B).
 //   run/*                the Run view (te_run.cpp, step 6 part V).
+//   wrap/*               rows that wrap at narrow widths (te_wrap.cpp,
+//                        2026-11-23).
 //   docs/designer.md, "Decisions of step 4", says what each one checks.
 // Each test sends the engine's mouse and keys through ImGui's input queue,
 // as a person would. Exit 0 when every test passes, 1 otherwise.
@@ -448,6 +450,7 @@ int main(int argc, char** argv) {
     te_register_panels(engine);
     te_register_preview(engine);
     te_register_run(engine);
+    te_register_wrap(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 && argv[2][0] ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);

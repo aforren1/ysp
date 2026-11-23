@@ -20,6 +20,7 @@
 // the display zooms about the cursor, a middle drag pans, and the details
 // below the display can fold away so the display takes their room.
 #include "views.h"
+#include "flow.h"
 #include "skt.h"
 #include "player.h"   // PL_NEED_FIELD
 
@@ -109,6 +110,12 @@ void user_text(const char* s) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::Dummy(ImVec2(b.width, h));
     skt_draw_layout(ImGui::GetWindowDrawList(), l, p.x, p.y + (h - b.height) * 0.5f - b.y, 1.0f, kText);
+}
+
+// The width that user_text() gives s.
+float user_w(const char* s) {
+    const skb_layout_t* l = s && s[0] ? skt_layout(s, ui_text_size()) : nullptr;
+    return l ? skb_layout_get_bounds(l).width : 0.0f;
 }
 
 // A colored band the width of the pane, as the chart's read-only banner
@@ -242,7 +249,7 @@ float status_line(const dsg_preview_info& in) {
     if (dsg_preview_issue(pv(), &is) && is.message) {
         const float y0 = ImGui::GetCursorPosY();
         ImGui::TextDisabled("Issue:");
-        ImGui::SameLine();
+        flow_next(user_w(is.message));
         user_text(is.message);
         varying = ImGui::GetCursorPosY() - y0;
     }
@@ -256,95 +263,126 @@ float status_line(const dsg_preview_info& in) {
     return varying;
 }
 
-// Where the shown session is.
+// A cell of the where rows: a lead in ImGui's font, user text, and a tail,
+// in a width that does not depend on them. The rows then wrap by the pane's
+// width only, never by a name, a frame number or an outcome, so the display
+// keeps its size while the session runs (the fixed rows rule, hand test
+// 2026-11-21). Text past the cell is clipped; the tooltip gives it whole.
+void where_cell(float w, const char* lead, const char* user, const char* tail) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetTextLineHeight();
+    ImGui::Dummy(ImVec2(w, h));
+    if (!ImGui::IsItemVisible()) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    dl->PushClipRect(p, ImVec2(p.x + w, p.y + h), true);
+    float x = p.x;
+    if (lead && lead[0]) {
+        ImGui::LogText("%s ", lead);
+        dl->AddText(ImVec2(x, p.y), dim, lead);
+        x += ImGui::CalcTextSize(lead).x + st.ItemSpacing.x;
+    }
+    if (user && user[0]) {
+        ImGui::LogText("%s ", user);
+        const skb_layout_t* l = skt_layout(user, ui_text_size());
+        if (l) {
+            const skb_rect2_t b = skb_layout_get_bounds(l);
+            skt_draw_layout(dl, l, x, p.y + (h - b.height) * 0.5f - b.y, 1.0f, kText);
+            x += b.width + st.ItemSpacing.x;
+        }
+    }
+    if (tail && tail[0]) {
+        ImGui::LogText("%s ", tail);
+        dl->AddText(ImVec2(x, p.y), dim, tail);
+        x += ImGui::CalcTextSize(tail).x;
+    }
+    dl->PopClipRect();
+    if (x > p.x + w + 0.5f && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s%s%s%s%s", lead ? lead : "", lead && lead[0] ? " " : "", user ? user : "", tail && tail[0] ? " " : "",
+                          tail ? tail : "");
+}
+
+// Where the shown session is: the trial, its leaf and row, the template,
+// the state, the frame; then the last trial. Every cell is there, empty
+// when there is nothing to show, so the rows are the same with no session.
 void where_line() {
-    // Two rows always, for the same reason as the status's note row.
     dsg_preview_where w = {};
-    if (!dsg_preview_where_now(pv(), &w)) {
-        ImGui::NewLine();
-        ImGui::NewLine();
-        return;
-    }
-    ImGui::TextDisabled("Trial %d", w.trial + 1);
-    if (w.leaf) {
-        ImGui::SameLine();
-        user_text(w.leaf);
-        if (w.condition >= 0) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("row %d", w.condition + 1);
-        }
-    }
-    if (w.tmpl) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("template");
-        ImGui::SameLine();
-        user_text(w.tmpl);
-    }
-    if (w.state) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("state");
-        ImGui::SameLine();
-        user_text(w.state);
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("frame %lld, %.3f s", (long long)w.frame, (double)w.t_ns * 1e-9);
-    if (!w.outcome) ImGui::TextDisabled("Last trial: none yet.");
-    else {
-        ImGui::TextDisabled("Last trial: %s", w.outcome);
-        if (w.response && w.response[0]) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("response");
-            ImGui::SameLine();
-            user_text(w.response);
-            ImGui::SameLine();
-            ImGui::TextDisabled("rt %.3f s", (double)w.rt_ns * 1e-9);
-        }
-    }
+    const bool have = dsg_preview_where_now(pv(), &w);
+    const float sp = ImGui::GetStyle().ItemSpacing.x;
+    // a name's room: a quarter of the pane, 5 to 10 em
+    const float em = ui_text_size();
+    const float name = ImClamp(ImGui::GetContentRegionAvail().x * 0.25f, 5.0f * em, 10.0f * em);
+    char a[64] = "", b[64] = "";
+    if (have) snprintf(a, sizeof a, "Trial %d", w.trial + 1);
+    where_cell(flow_text_w("Trial 00000"), a, nullptr, nullptr);
+    a[0] = 0;
+    if (have && w.leaf && w.condition >= 0) snprintf(a, sizeof a, "row %d", w.condition + 1);
+    float cw = name + sp + flow_text_w("row 0000");
+    flow_next(cw);
+    where_cell(cw, nullptr, have ? w.leaf : nullptr, a);
+    cw = flow_text_w("template") + sp + name;
+    flow_next(cw);
+    where_cell(cw, have && w.tmpl ? "template" : nullptr, have ? w.tmpl : nullptr, nullptr);
+    cw = flow_text_w("state") + sp + name;
+    flow_next(cw);
+    where_cell(cw, have && w.state ? "state" : nullptr, have ? w.state : nullptr, nullptr);
+    a[0] = 0;
+    if (have) snprintf(a, sizeof a, "frame %lld, %.3f s", (long long)w.frame, (double)w.t_ns * 1e-9);
+    cw = flow_text_w("frame 0000000, 00000.000 s");
+    flow_next(cw);
+    where_cell(cw, a, nullptr, nullptr);
+
+    // the last trial, on a row of its own
+    const bool resp = have && w.outcome && w.response && w.response[0];
+    a[0] = b[0] = 0;
+    if (have && w.outcome) snprintf(a, sizeof a, "Last trial: %s", w.outcome);
+    else if (have) snprintf(a, sizeof a, "Last trial: none yet.");
+    where_cell(flow_text_w("Last trial: ") + name, a, nullptr, nullptr);
+    cw = flow_text_w("response") + sp + name;
+    flow_next(cw);
+    where_cell(cw, resp ? "response" : nullptr, resp ? w.response : nullptr, nullptr);
+    if (resp) snprintf(b, sizeof b, "rt %.3f s", (double)w.rt_ns * 1e-9);
+    cw = flow_text_w("rt 00.000 s");
+    flow_next(cw);
+    where_cell(cw, b, nullptr, nullptr);
 }
 
 // --- the controls -----------------------------------------------------------------
 
+// The order (docs/designer.md, "Rows that wrap"): what a person uses while
+// the session runs comes first (Run, Pause, Step, Restart), then the
+// display's size (Fit, 1:1, the zoom, Pop out), so they stay on the first
+// row of a pane of 320 points or more; the settings of a session (Details,
+// Speed, New seed) come last and wrap first.
 void controls(const dsg_preview_info& in, dsg_preview_settings& ps) {
     const bool have = in.status == DSG_PV_RUNNING || in.status == DSG_PV_PAUSED;
     ImGui::BeginDisabled(in.status != DSG_PV_PAUSED);
     if (ImGui::Button("Run")) dsg_preview_run(pv());
     ImGui::EndDisabled();
     ImGui::SetItemTooltip("Run the session in real time, at the speed chosen");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Pause"));
     ImGui::BeginDisabled(in.status != DSG_PV_RUNNING);
     if (ImGui::Button("Pause")) dsg_preview_pause(pv());
     ImGui::EndDisabled();
     ImGui::SetItemTooltip("Stop the frames; the display keeps the last one");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Step"));
     ImGui::BeginDisabled(!have);
     if (ImGui::Button("Step")) dsg_preview_step(pv());
     ImGui::EndDisabled();
     ImGui::SetItemTooltip("Show one more frame, then pause");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Restart"));
     if (ImGui::Button("Restart")) dsg_preview_restart(pv());
     ImGui::SetItemTooltip("Load the session again, with the same seed and trial");
-    ImGui::SameLine();
-    if (ImGui::Button("New seed")) {
-        // splitmix64 of the clock and the old seed: any 63-bit value
-        uint64_t z = (uint64_t)time(nullptr) + ps.session.seed + 0x9e3779b97f4a7c15ull;
-        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
-        z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
-        z = (z ^ (z >> 31)) & 0x7fffffffffffffffull;
-        ps.session.seed = z ? z : 1;
-        apply(ps);
-    }
-    ImGui::SetItemTooltip("Draw a new seed and restart");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(80);
-    int sp = 2;
-    for (int i = 0; i < 4; i++)
-        if (fabs(ps.speed - kSpeeds[i]) < 1e-9) sp = i;
-    if (ImGui::Combo("Speed", &sp, kSpeedNames, 4)) {
-        ps.speed = kSpeeds[sp];
-        apply(ps);
-    }
-    ImGui::SetItemTooltip("Session time per real time");
-    ImGui::SameLine();
+    // Fit, 1:1, the zoom and Pop out (with Full screen) stay on one row when
+    // a row can hold them: they are one choice, the display's size.
+    const bool popped = ui_preview_popped();
+    const bool fs = ui_preview_fullscreen();
+    const char* pop = popped ? "Pop in" : "Pop out";
+    const char* fs_label = fs ? "Leave full screen" : "Full screen";
+    const float sp_x = ImGui::GetStyle().ItemSpacing.x, zoom_w = flow_text_w("1600 %");
+    flow_next(flow_check_w("Fit") + sp_x + flow_check_w("1:1") + sp_x + zoom_w + sp_x + flow_button_w(pop) +
+              (popped ? sp_x + flow_button_w(fs_label) : 0.0f));
     if (ImGui::RadioButton("Fit", ps.scale == DSG_PV_SCALE_FIT)) {
         ps.scale = DSG_PV_SCALE_FIT;
         ps.zoom = 1;
@@ -352,7 +390,7 @@ void controls(const dsg_preview_info& in, dsg_preview_settings& ps) {
         apply(ps);
     }
     ImGui::SetItemTooltip("Scale the display to the pane");
-    ImGui::SameLine();
+    flow_next(flow_check_w("1:1"));
     if (ImGui::RadioButton("1:1", ps.scale == DSG_PV_SCALE_1TO1)) {
         // about the middle of the display area: the point there stays
         const float s = P.shown_s > 0 ? P.shown_s : 1.0f;
@@ -363,33 +401,64 @@ void controls(const dsg_preview_info& in, dsg_preview_settings& ps) {
         apply(ps);
     }
     ImGui::SetItemTooltip("One participant pixel to one pixel of this monitor");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%.0f %%", (double)P.shown_s * 100.0);
+    // The readout in the width of the widest zoom, so a wheel step does not
+    // move the items after it to another row.
+    char zoom[16];
+    snprintf(zoom, sizeof zoom, "%.0f %%", (double)P.shown_s * 100.0);
+    flow_next(zoom_w);
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(zoom_w, ImGui::GetFrameHeight()));
+        ImGui::LogText("%s", zoom);
+        const ImVec2 ts = ImGui::CalcTextSize(zoom);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + zoom_w - ts.x, p.y + ImGui::GetStyle().FramePadding.y),
+                                            ImGui::GetColorU32(ImGuiCol_TextDisabled), zoom);
+    }
     ImGui::SetItemTooltip("Device pixels per participant pixel. The wheel over the display zooms; a middle drag pans.");
-    ImGui::SameLine();
+    // The preview in a window of its own (2026-11-23): where ImGui's
+    // multi-viewport works (native SDL3 on X11, Windows, macOS).
+    flow_next(flow_button_w(pop));
+    ImGui::BeginDisabled(!popped && !ui_preview_can_pop());
+    if (ImGui::Button(pop)) ui_preview_pop(!popped);
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(popped                 ? "Put the preview back in the pane"
+                          : ui_preview_can_pop() ? "Show the preview in a window of its own, which can go full screen"
+                                                 : "This platform gives no window of its own here (Wayland, a browser)");
+    if (popped) {
+        flow_next(flow_button_w(fs_label));
+        if (ImGui::Button(fs_label) && !ui_preview_set_fullscreen(!fs))
+            ui_set_status("The preview's window did not go %s.", fs ? "back from full screen" : "full screen");
+        ImGui::SetItemTooltip(fs ? "Back to a window (Esc, when the session does not have the keys)" : "Fill the monitor that the window is on");
+    }
+    flow_next(flow_check_w("Details"));
     bool details = ps.details;
     if (ImGui::Checkbox("Details", &details)) {
         ps.details = details;
         apply(ps);
     }
     ImGui::SetItemTooltip("Show the settings, the outputs and the data set below the display; off, the display takes their room");
-    // The preview in a window of its own (2026-11-23): where ImGui's
-    // multi-viewport works (native SDL3 on X11, Windows, macOS).
-    ImGui::SameLine();
-    const bool popped = ui_preview_popped();
-    ImGui::BeginDisabled(!popped && !ui_preview_can_pop());
-    if (ImGui::Button(popped ? "Pop in" : "Pop out")) ui_preview_pop(!popped);
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip(popped                 ? "Put the preview back in the pane"
-                          : ui_preview_can_pop() ? "Show the preview in a window of its own, which can go full screen"
-                                                 : "This platform gives no window of its own here (Wayland, a browser)");
-    if (popped) {
-        ImGui::SameLine();
-        const bool fs = ui_preview_fullscreen();
-        if (ImGui::Button(fs ? "Leave full screen" : "Full screen") && !ui_preview_set_fullscreen(!fs))
-            ui_set_status("The preview's window did not go %s.", fs ? "back from full screen" : "full screen");
-        ImGui::SetItemTooltip(fs ? "Back to a window (Esc, when the session does not have the keys)" : "Fill the monitor that the window is on");
+    const float speed_w = 80.0f;
+    flow_next(flow_field_w(speed_w, "Speed"));
+    ImGui::SetNextItemWidth(speed_w);
+    int sp = 2;
+    for (int i = 0; i < 4; i++)
+        if (fabs(ps.speed - kSpeeds[i]) < 1e-9) sp = i;
+    if (ImGui::Combo("Speed", &sp, kSpeedNames, 4)) {
+        ps.speed = kSpeeds[sp];
+        apply(ps);
     }
+    ImGui::SetItemTooltip("Session time per real time");
+    flow_next(flow_button_w("New seed"));
+    if (ImGui::Button("New seed")) {
+        // splitmix64 of the clock and the old seed: any 63-bit value
+        uint64_t z = (uint64_t)time(nullptr) + ps.session.seed + 0x9e3779b97f4a7c15ull;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+        z = (z ^ (z >> 31)) & 0x7fffffffffffffffull;
+        ps.session.seed = z ? z : 1;
+        apply(ps);
+    }
+    ImGui::SetItemTooltip("Draw a new seed and restart");
 }
 
 // --- the display ------------------------------------------------------------------
@@ -550,7 +619,7 @@ void choice_strip() {
         const char* label = dsg_preview_choice_label(pv(), i);
         const skb_layout_t* l = label ? skt_layout(label, ui_text_size()) : nullptr;
         const skb_rect2_t lb = l ? skb_layout_get_bounds(l) : skb_rect2_t{};
-        ImGui::SameLine();
+        flow_next(ImMax(lb.width, 12.0f) + 2 * pad.x);
         ImGui::PushID(i);
         const ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::Button("##choice", ImVec2(ImMax(lb.width, 12.0f) + 2 * pad.x, h));
@@ -608,7 +677,7 @@ void pin_fields(dsg_preview_settings& ps) {
         if (dsg_preview_leaf_at(pv(), i, &lf) && lf.path && strcmp(lf.path, ps.session.pin_leaf) == 0) rows = lf.rows;
     }
     if (!ps.session.pin_leaf[0] || rows <= 0) return;
-    ImGui::SameLine();
+    flow_next(flow_field_w(100, "Row"));
     ImGui::SetNextItemWidth(100);
     if (!editing("Row")) P.pin_row = ps.session.pin_row < 0 ? 0 : ps.session.pin_row + 1;
     ImGui::InputInt("Row", &P.pin_row, 0, 0);
@@ -647,7 +716,7 @@ void field_rows(dsg_preview_settings& ps) {
             apply(ps);
         }
         ImGui::SetItemTooltip("Empty: the check's stand-in");
-        ImGui::SameLine();
+        flow_next(user_w(is.name));
         user_text(is.name);
         ImGui::PopID();
     }
@@ -755,9 +824,11 @@ void undriven_section() {
         if (!role) continue;
         ImGui::PushID(i);
         user_text(role);
-        ImGui::SameLine();
-        if (why && why[0]) ImGui::TextDisabled("not driven: %s", why);
-        else ImGui::TextDisabled("not driven");
+        char line[256];
+        if (why && why[0]) snprintf(line, sizeof line, "not driven: %s", why);
+        else snprintf(line, sizeof line, "not driven");
+        flow_next(flow_text_w(line));
+        ImGui::TextDisabled("%s", line);
         ImGui::PopID();
     }
 }
@@ -768,7 +839,7 @@ void data_section(const dsg_preview_info& in) {
         return;
     }
     ImGui::TextDisabled("Folder:");
-    ImGui::SameLine();
+    flow_next(user_w(in.out_dir));
     user_text(in.out_dir);
     if (ImGui::Button("Open trials.csv")) {
         char path[DSG_PATH_MAX];
@@ -776,7 +847,7 @@ void data_section(const dsg_preview_info& in) {
             ui_set_status("No view opens trials.csv yet. Open it from the folder: %s", in.out_dir);
     }
     ImGui::SetItemTooltip("Show the session's trials, read-only");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Copy path"));
     if (ImGui::Button("Copy path")) ImGui::SetClipboardText(in.out_dir);
     ImGui::SetItemTooltip("Copy the folder's path to the clipboard");
 }

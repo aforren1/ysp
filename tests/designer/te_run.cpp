@@ -693,6 +693,21 @@ bool make_dirs(const char* path) {
 
 const char* te_run_player() { return g_player; }
 
+#if !DSG_RUN_VIEW_DOUBLE
+bool te_run_start_sim(ImGuiTestContext* ctx, const char* script) { return start_sim(ctx, script) && wait_armed(ctx); }
+
+bool te_run_offer_kill(ImGuiTestContext* ctx) {
+#ifdef _WIN32
+    // no Stop for a --sim run: the Run view offers Kill at once
+    (void)ctx;
+    return false;
+#else
+    ctx->ItemClick(run_item(ctx, "Stop"));
+    return wait_for(ctx, 30.0, [] { return run_info().kill_offered; });
+#endif
+}
+#endif
+
 void te_run_cleanup() {
     char err[256];
     const char* slash = strrchr(g_cfg_home, '/');

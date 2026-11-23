@@ -20,6 +20,7 @@
 // text, so Skribidi draws them (skt.h), and each also goes to ImGui's log
 // for the tests, as the preview's pane does.
 #include "views.h"
+#include "flow.h"
 #include "skt.h"
 #include "player.h"   // PL_NEED_*, yrig_profile
 
@@ -119,6 +120,12 @@ void user_text(const char* s, int n = -1) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::Dummy(ImVec2(b.width, h));
     skt_draw_layout(ImGui::GetWindowDrawList(), l, p.x, p.y + (h - b.height) * 0.5f - b.y, 1.0f, kText);
+}
+
+// The width that user_text() gives s.
+float user_w(const char* s) {
+    const skb_layout_t* l = s && s[0] ? skt_layout(s, ui_text_size()) : nullptr;
+    return l ? skb_layout_get_bounds(l).width : 0.0f;
 }
 
 // A label in ImGui's font, then user text on the same line.
@@ -286,18 +293,22 @@ const char* check_word(int c) {
 void loopback_line(const char* what, const yrig_loopback& lb) {
     if (!lb.set) return;
     ImGui::TextDisabled("%s:", what);
-    ImGui::SameLine();
+    flow_next(flow_text_w(check_word(lb.check)));
     ImGui::TextColored(lb.check == YRIG_CHECK_OK ? kOk : kBad, "%s", check_word(lb.check));
-    ImGui::SameLine();
-    ImGui::TextDisabled("(n %d, %s)", (int)lb.n, lb.date);
+    char line[96];
+    snprintf(line, sizeof line, "(n %d, %s)", (int)lb.n, lb.date);
+    flow_next(flow_text_w(line));
+    ImGui::TextDisabled("%s", line);
 }
 
 // The profile, read-only (decision 12): its roles and devices, the display
 // and its calibration, the view, the signals, the notes of the load.
 void rig_details(const yrig_profile* p) {
     labeled("Rig:", p->rig);
-    ImGui::SameLine();
-    ImGui::TextDisabled("written %s", p->written);
+    char written[96];
+    snprintf(written, sizeof written, "written %s", p->written);
+    flow_next(flow_text_w(written));
+    ImGui::TextDisabled("%s", written);
     labeled("File:", dsg_rig_path(V.rig));
     if (ImGui::TreeNodeEx("Roles", ImGuiTreeNodeFlags_DefaultOpen, "Roles (%d)", p->n_roles)) {
         if (p->n_roles == 0) ImGui::TextDisabled("No role is bound. The keyboard takes each role that it can.");
@@ -305,11 +316,13 @@ void rig_details(const yrig_profile* p) {
             const yrig_role& r = p->role[i];
             ImGui::PushID(i);
             user_text(r.name);
-            ImGui::SameLine();
+            // "family" and "key" each stay with their value
+            const float sp = ImGui::GetStyle().ItemSpacing.x;
+            flow_next(flow_text_w("family") + sp + user_w(r.family));
             ImGui::TextDisabled("family");
             ImGui::SameLine();
             user_text(r.family);
-            ImGui::SameLine();
+            flow_next(flow_text_w("key") + sp + user_w(r.key));
             ImGui::TextDisabled("key");
             ImGui::SameLine();
             user_text(r.key);
@@ -333,7 +346,7 @@ void rig_details(const yrig_profile* p) {
             loopback_line("photodiode latency", p->display.latency);
             if (p->display.calibration[0]) {
                 labeled("Calibration:", p->display.calibration);
-                ImGui::SameLine();
+                flow_next(flow_text_w(check_word(p->display.check)));
                 const bool ok = p->display.check == YRIG_CHECK_OK;
                 ImGui::TextColored(ok ? kOk : kBad, "%s", check_word(p->display.check));
                 if (ok && !dsg_rig_cal(V.rig)) ImGui::TextColored(kWarn, "The calibration file did not load.");
@@ -352,9 +365,11 @@ void rig_details(const yrig_profile* p) {
             const yrig_signal& s = p->signal[i];
             ImGui::PushID(i);
             user_text(s.name);
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s, %s, %g x %g a count, device %s", yrig_adapter_name(s.adapter), yrig_units_name(s.units), s.per_count[0],
-                                s.per_count[1], s.device == YRIG_DEVICE_CLICK ? "click" : "any");
+            char line[256];
+            snprintf(line, sizeof line, "%s, %s, %g x %g a count, device %s", yrig_adapter_name(s.adapter), yrig_units_name(s.units),
+                     s.per_count[0], s.per_count[1], s.device == YRIG_DEVICE_CLICK ? "click" : "any");
+            flow_next(flow_text_w(line));
+            ImGui::TextDisabled("%s", line);
             if (s.bounded) ImGui::TextDisabled("  bounds x %g to %g, y %g to %g", s.lo[0], s.hi[0], s.lo[1], s.hi[1]);
             ImGui::PopID();
         }
@@ -380,8 +395,9 @@ void rig_section(dsg_run_settings* rs) {
     rig_combo(rs);
     if (V.listed && !V.list_ok) {
         ImGui::TextColored(kWarn, "The rig folder gives no profile:");
-        ImGui::SameLine();
-        user_text(V.list_err[0] ? V.list_err : "no reason given");
+        const char* why = V.list_err[0] ? V.list_err : "no reason given";
+        flow_next(user_w(why));
+        user_text(why);
     }
     if (!rs->rig[0]) {
         ImGui::TextDisabled("No profile: the keyboard takes each role that it can. A real run has no view, signals or calibration.");
@@ -389,8 +405,9 @@ void rig_section(dsg_run_settings* rs) {
     }
     if (!V.rig) {
         ImGui::TextColored(kBad, "The profile does not load:");
-        ImGui::SameLine();
-        user_text(V.rig_err[0] ? V.rig_err : "no reason given");
+        const char* why = V.rig_err[0] ? V.rig_err : "no reason given";
+        flow_next(user_w(why));
+        user_text(why);
         return;
     }
     char line[512];
@@ -398,8 +415,10 @@ void rig_section(dsg_run_settings* rs) {
     user_text(line);
     const yrig_profile* p = dsg_rig_profile(V.rig);
     if (p && p->n_notes > 0) {
-        ImGui::SameLine();
-        ImGui::TextColored(kWarn, "%d check notes", p->n_notes);
+        char notes[32];
+        snprintf(notes, sizeof notes, "%d check notes", p->n_notes);
+        flow_next(flow_text_w(notes));
+        ImGui::TextColored(kWarn, "%s", notes);
     }
     if (ImGui::SmallButton("Copy the folder's path")) {
         char dir[DSG_PATH_MAX];
@@ -430,10 +449,11 @@ void build_section() {
     if (ui_build_busy()) ImGui::TextColored(kWarn, "Building ...");
     if (!b) ImGui::TextDisabled("No Build since the project opened.");
     else if (b->status == DSG_BUILD_OK) {
+        // the ID stays beside its label: a methods section quotes the line
         ImGui::TextDisabled("Pack ID:");
         ImGui::SameLine();
         ImGui::TextUnformatted(b->pack_id);
-        ImGui::SameLine();
+        flow_next(flow_button_w("Copy ID"));
         if (ImGui::SmallButton("Copy ID")) ImGui::SetClipboardText(b->pack_id);
         ImGui::SetItemTooltip("Copy the pack ID. A methods section cites it");
         char when[16] = "?";
@@ -505,10 +525,10 @@ void field_row(dsg_run_settings* rs, int slot, const char* name, bool integer) {
         f = field_index(rs, name);
     }
     ImGui::SetItemTooltip("The session field's value (--field NAME=VALUE)");
-    ImGui::SameLine();
+    flow_next(user_w(name));
     user_text(name);
     if (f < 0 || !rs->fields[f].value[0]) {
-        ImGui::SameLine();
+        flow_next(flow_text_w("required"));
         ImGui::TextColored(kWarn, "required");
     }
     ImGui::PopID();
@@ -556,7 +576,7 @@ void gains_rows(dsg_run_settings* rs) {
             }
         }
         ImGui::SetItemTooltip("--sim-gain: role units a count of the simulated mouse. 0 removes it");
-        ImGui::SameLine();
+        flow_next(flow_text_w("gain of") + ImGui::GetStyle().ItemSpacing.x + user_w(is.name));
         ImGui::TextDisabled("gain of");
         ImGui::SameLine();
         user_text(is.name);
@@ -585,11 +605,11 @@ void tier_rows(dsg_run_settings* rs) {
             }
         }
         ImGui::SetItemTooltip("--allow-below-tier: run with this role below its tier. session.json records it");
-        ImGui::SameLine();
+        flow_next(flow_text_w("Allow"));
         ImGui::TextDisabled("Allow");
-        ImGui::SameLine();
+        flow_next(user_w(is.name));
         user_text(is.name);
-        ImGui::SameLine();
+        flow_next(flow_text_w("below its tier"));
         ImGui::TextDisabled("below its tier");
         // ysp/rigfile.h gives a role tier 1 or UNKNOWN, so a need that stays
         // with a profile is at UNKNOWN (Part P)
@@ -697,14 +717,14 @@ void controls(const dsg_run_info& in, bool going, bool sim) {
     const bool stop_reaches = true;
 #endif
     if (stop_reaches && !in.kill_offered) {
-        ImGui::SameLine();
+        flow_next(flow_button_w("Stop"));
         ImGui::BeginDisabled(in.state == DSG_RUN_STOPPING);
         if (ImGui::Button("Stop")) ui_run_stop();
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("Ask the player to stop. It closes the data set (exit 3)");
     }
     if (in.kill_offered || !stop_reaches) {
-        ImGui::SameLine();
+        flow_next(flow_button_w("Kill"));
         // dsg_run_kill() comes after a Stop; a Stop that cannot reach the
         // player gives 0 at once
         if (ImGui::Button("Kill") && (in.kill_offered || ui_run_stop() == 0)) ui_run_kill();
@@ -756,8 +776,9 @@ void log_view(const char* log) {
 void end_text(const dsg_run_info& in, bool sim) {
     const int st = in.exit_status;
     ImGui::TextColored(st == 0 ? kOk : st == 3 ? kWarn : kBad, "Ended:");
-    ImGui::SameLine();
-    user_text(in.exit_text && in.exit_text[0] ? in.exit_text : "no exit text");
+    const char* exit_text = in.exit_text && in.exit_text[0] ? in.exit_text : "no exit text";
+    flow_next(user_w(exit_text));
+    user_text(exit_text);
     if (st == 1) {
         ImGui::TextDisabled("The Issues panel shows the player's message. The check with the same profile says most of these first.");
     } else if (st == 2) {
@@ -802,17 +823,20 @@ void output_section(const dsg_run* r, const dsg_run_info& in, bool sim) {
     if (!sim && in.state != DSG_RUN_ENDED) ImGui::TextDisabled("The preview stops while a real run goes.");
     if (in.trials > 0) {
         ImGui::TextDisabled("Last trial:");
-        ImGui::SameLine();
-        user_text(in.last_outcome && in.last_outcome[0] ? in.last_outcome : "no outcome");
+        const char* outcome = in.last_outcome && in.last_outcome[0] ? in.last_outcome : "no outcome";
+        flow_next(user_w(outcome));
+        user_text(outcome);
         if (in.last_response && in.last_response[0]) {
-            ImGui::SameLine();
+            flow_next(flow_text_w("response") + ImGui::GetStyle().ItemSpacing.x + user_w(in.last_response));
             ImGui::TextDisabled("response");
             ImGui::SameLine();
             user_text(in.last_response);
         }
         if (in.last_rt_s >= 0) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("rt %.3f s", in.last_rt_s);
+            char rt[32];
+            snprintf(rt, sizeof rt, "rt %.3f s", in.last_rt_s);
+            flow_next(flow_text_w(rt));
+            ImGui::TextDisabled("%s", rt);
         }
     }
     if (in.state == DSG_RUN_ENDED) end_text(in, sim);
@@ -821,7 +845,7 @@ void output_section(const dsg_run* r, const dsg_run_info& in, bool sim) {
         if (ImGui::SmallButton("Copy path")) ImGui::SetClipboardText(in.out_dir);
         ImGui::SetItemTooltip("Copy the output folder's path to the clipboard");
         if (in.state == DSG_RUN_ENDED && in.trials > 0) {
-            ImGui::SameLine();
+            flow_next(flow_button_w("Open trials.csv"));
             if (ImGui::SmallButton("Open trials.csv")) {
                 char path[DSG_PATH_MAX];
                 if (dsg_join(path, sizeof path, in.out_dir, "trials.csv") || !ui_open_file(path))
@@ -847,9 +871,14 @@ void draw() {
     controls(in, going, sim);
     // one line that stays at the top: the state and the trials
     if (r) {
-        ImGui::SameLine();
-        ImGui::Text("%s%s, %.1f s. Trials written: %d.", state_word(in.state), sim ? " (simulated)" : "", (double)in.elapsed_ns * 1e-9,
-                    in.trials);
+        char line[128];
+        snprintf(line, sizeof line, "%s%s, %.1f s. Trials written: %d.", state_word(in.state), sim ? " (simulated)" : "",
+                 (double)in.elapsed_ns * 1e-9, in.trials);
+        // in the width of a long run's line, so its row does not change
+        // as the seconds and the trials count up
+        flow_next(ImMax(flow_text_w(line), flow_text_w("Stopping (simulated), 00000.0 s. Trials written: 00000.")));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(line);
     }
     // "##section": the Build section's header and its button are both "Build"
     if (ImGui::CollapsingHeader("Rig##section", ImGuiTreeNodeFlags_DefaultOpen)) rig_section(rs);

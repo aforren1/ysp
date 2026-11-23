@@ -1,6 +1,6 @@
 // te_common.h - what the Test Engine runner (te_test.cpp) gives the parts'
 // test files (te_chart.cpp, te_tables.cpp, te_panels.cpp, te_preview.cpp,
-// te_run.cpp).
+// te_run.cpp, te_wrap.cpp).
 // Shared: a part adds its tests in its own file and does not change this
 // one.
 #pragma once
@@ -41,3 +41,12 @@ const char* te_run_player();
 // Removes the config folder that te_register_run() made under HOME, if any
 // (a work folder under /tmp, which yrt_user_dir() refuses). After the tests.
 void te_run_cleanup();
+// With the Run view shown: a simulated run of the open project started by
+// its Run, with R's fake_player running script; true once the script's
+// "out armed" line came (te_run.cpp). Then a Stop that the script ignores
+// ("term ignore"), and frames until the run offers Kill; false on Windows,
+// where a --sim run has no Stop.
+bool te_run_start_sim(ImGuiTestContext* ctx, const char* script);
+bool te_run_offer_kill(ImGuiTestContext* ctx);
+// "wrap" (2026-11-23): the rows that wrap at narrow widths (te_wrap.cpp).
+void te_register_wrap(ImGuiTestEngine* e);

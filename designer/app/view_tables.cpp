@@ -7,6 +7,7 @@
 // not CSV, and the designer writes no workbook. The grid is a cache of the
 // buffer (csv.h), made again when the buffer's revision moves.
 #include "views.h"
+#include "flow.h"
 #include "view_tables.h"
 #include "csv.h"
 #include "skf.h"
@@ -520,27 +521,31 @@ void toolbar(Table* t) {
     ImGui::BeginDisabled(!can || t->idx.n_cols == 0);
     if (ImGui::Button("Add row")) act(t, ADD_ROW);
     ImGui::SetItemTooltip("A copy of the selected row, below it; with no row selected, of the last row, at the end.");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Remove row"));
     ImGui::BeginDisabled(!here || s->row < 0);
     if (ImGui::Button("Remove row")) act(t, REMOVE_ROW);
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_next(flow_button_w("Add column"));
     ImGui::BeginDisabled(!can);
     if (ImGui::Button("Add column")) act(t, ADD_COLUMN);
     ImGui::SetItemTooltip("An empty column after the selected one. Double-click its name to rename it.");
-    ImGui::SameLine();
+    flow_next(flow_button_w("Remove column"));
     ImGui::BeginDisabled(!here || s->col < 0 || t->idx.n_cols < 2);
     if (ImGui::Button("Remove column")) act(t, REMOVE_COLUMN);
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    char line[300] = "";
     if (t->sheet)
-        ImGui::TextDisabled("%s: an Excel workbook, read-only. Edit it in Excel.", t->source);
+        snprintf(line, sizeof line, "%s: an Excel workbook, read-only. Edit it in Excel.", t->source);
     else if (t->buf > 0)
-        ImGui::TextDisabled("%d rows, %d columns; %s; %s%s", t->idx.n_rows, t->idx.n_cols,
-                            t->delim == '\t' ? "tabs" : t->delim == ';' ? "';'" : "','", t->idx.crlf ? "CRLF" : "LF",
-                            dsg_doc_dirty(ui_doc(), t->buf) ? "; not saved" : "");
+        snprintf(line, sizeof line, "%d rows, %d columns; %s; %s%s", t->idx.n_rows, t->idx.n_cols,
+                 t->delim == '\t' ? "tabs" : t->delim == ';' ? "';'" : "','", t->idx.crlf ? "CRLF" : "LF",
+                 dsg_doc_dirty(ui_doc(), t->buf) ? "; not saved" : "");
+    if (line[0]) {
+        flow_next(flow_text_w(line));
+        ImGui::TextDisabled("%s", line);
+    }
 }
 
 // The issues that name this table, each a link to its cell.
